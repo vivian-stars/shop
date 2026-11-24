@@ -269,8 +269,8 @@ def test_catalog_lists_platforms_before_freight_and_keeps_common_tools():
     ]
     assert all(item["tools"][0]["ready"] is False for item in body["platforms"][1:])
     assert [(item["id"], item["ready"]) for item in body["common"]] == [
-        ("text-translate", False),
-        ("video-translate", False),
+        ("text-translate", True),
+        ("video-translate", True),
     ]
     refused = client.post(
         "/api/quote",

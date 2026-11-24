@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from decimal import Decimal
 from urllib.parse import quote as urlquote
@@ -17,6 +18,9 @@ from shop.shopapp.money import money
 from shop.shopapp.platforms import get_platform
 from shop.shopapp.products import MISSING, product_from_fields, products_from_excel
 from shop.shopapp.store import DATA, RateStore
+from shop.shopapp.translate.engine import translate_text
+from shop.shopapp.translate.languages import require_source, require_target, source_options, target_options
+from shop.shopapp.translate.video import result_path, translate_upload
 
 app = FastAPI(title="电商工具")
 STORE = RateStore()
@@ -31,6 +35,54 @@ def health():
 @app.get("/api/catalog")
 def catalog():
     return catalog_payload()
+
+
+@app.get("/api/translate/languages")
+def translate_languages():
+    return {"source": source_options(), "target": target_options()}
+
+
+@app.post("/api/translate/text")
+def translate_text_route(
+    source: str = Form("auto"),
+    target: str = Form("en"),
+    text: str = Form(""),
+):
+    try:
+        source_code = require_source(source)
+        target_code = require_target(target)
+        if not text.strip():
+            raise ValueError("请输入要翻译的文字")
+        translation, detected = translate_text(text, source_code, target_code)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    used = detected if source_code == "auto" else source_code
+    return {"source": used, "target": target_code, "translation": translation}
+
+
+@app.post("/api/translate/video")
+async def translate_video_route(
+    source: str = Form("auto"),
+    target: str = Form("en"),
+    file: UploadFile = File(...),
+):
+    try:
+        source_code = require_source(source)
+        target_code = require_target(target)
+        payload = await file.read()
+        return translate_upload(payload, file.filename or "video.mp4", source_code, target_code)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/translate/video/{video_id}")
+def translated_video(video_id: str):
+    if re.fullmatch(r"[0-9a-f]{32}", video_id) is None:
+        raise HTTPException(404, "没有这个视频")
+    path = result_path(video_id)
+    if path is None:
+        raise HTTPException(404, "没有这个视频")
+    return FileResponse(path, media_type="video/mp4", filename="译文字幕视频.mp4")
 
 
 @app.get("/api/meta")

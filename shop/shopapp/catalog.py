@@ -35,8 +35,8 @@ PLATFORMS: tuple[PlatformSpec, ...] = (
 )
 
 COMMON: tuple[ToolSpec, ...] = (
-    ToolSpec("text-translate", "文字翻译", False, "翻译商品文字。这项不挂在某个平台下面。"),
-    ToolSpec("video-translate", "视频翻译", False, "翻译商品视频。这项不挂在某个平台下面。"),
+    ToolSpec("text-translate", "文字翻译", True, "选择输入语言和输出语言，翻译填写的文字。"),
+    ToolSpec("video-translate", "视频翻译", True, "选择输入语言和输出语言，上传视频后翻译其中的说话。"),
 )
 
 

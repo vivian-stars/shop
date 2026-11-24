@@ -39,13 +39,24 @@
     .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
     input, select, button { font: inherit; }
-    input[type="text"], input[type="number"], select {
+    input[type="text"], input[type="number"], select, textarea {
       border: 1px solid var(--line);
       background: white;
       color: var(--ink);
       border-radius: 8px;
       padding: 8px 10px;
     }
+    textarea { width: 100%; min-height: 140px; resize: vertical; }
+    .output {
+      white-space: pre-wrap;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      min-height: 72px;
+    }
+    video.preview { width: min(720px, 100%); background: #111; border-radius: 10px; margin-top: 8px; }
+    a.file { color: var(--accent); }
     .hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
     .channels, .toggles { display: flex; flex-wrap: wrap; gap: 8px; }
     .channels label, .toggles label {
@@ -119,6 +130,56 @@
     </section>
     <section class="placeholder hidden" id="placeholder"></section>
 
+    <form id="text-form" class="hidden">
+      <h2>文字翻译</h2>
+      <div class="grid">
+        <label>输入语言
+          <select id="text-source" name="source"></select>
+        </label>
+        <label>输出语言
+          <select id="text-target" name="target"></select>
+        </label>
+      </div>
+      <label>原文
+        <textarea id="text-input" name="text" placeholder="填写要翻译的商品文字"></textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" id="text-submit">翻译</button>
+      </div>
+      <div id="text-message"></div>
+      <h2>译文</h2>
+      <div class="output" id="text-output"></div>
+    </form>
+
+    <form id="video-form" class="hidden">
+      <h2>视频翻译</h2>
+      <div class="grid">
+        <label>输入语言
+          <select id="video-source" name="source"></select>
+        </label>
+        <label>输出语言
+          <select id="video-target" name="target"></select>
+        </label>
+      </div>
+      <label>视频
+        <input id="video-file" name="file" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv">
+      </label>
+      <p class="hint" id="video-file-note"></p>
+      <p class="hint">按视频里的说话翻译，并生成带译文字幕的新视频。原来的声音保留。视频请短于 3 分钟、小于 80MB。</p>
+      <div class="actions">
+        <button type="submit" id="video-submit">翻译</button>
+      </div>
+      <div id="video-message"></div>
+      <div id="video-result" class="hidden">
+        <h2>原文</h2>
+        <div class="output" id="video-transcript"></div>
+        <h2>译文</h2>
+        <div class="output" id="video-translation"></div>
+        <video class="preview" id="video-player" controls></video>
+        <p><a class="file" id="video-download" href="" download="译文字幕视频.mp4">下载译文字幕视频</a></p>
+      </div>
+    </form>
+
     <form id="form" class="hidden">
       <h2>运费计算</h2>
       <input type="hidden" name="platform" id="platform" value="aliexpress">
@@ -189,8 +250,11 @@
   </main>
   <script>
     const form = document.querySelector("#form");
+    const textForm = document.querySelector("#text-form");
+    const videoForm = document.querySelector("#video-form");
     const message = document.querySelector("#message");
     let rateId = "default";
+    let languages = null;
     let lastPayload = null;
     let catalog = null;
     let platformId = "";
@@ -265,12 +329,19 @@
       });
     }
 
+    function closeWork() {
+      form.classList.add("hidden");
+      textForm.classList.add("hidden");
+      videoForm.classList.add("hidden");
+      document.querySelector("#result").classList.add("hidden");
+      document.querySelector("#placeholder").classList.add("hidden");
+    }
+
     function showPlaceholder(text) {
+      closeWork();
       const box = document.querySelector("#placeholder");
       box.textContent = text;
       box.classList.remove("hidden");
-      form.classList.add("hidden");
-      document.querySelector("#result").classList.add("hidden");
     }
 
     function selectPlatform(id) {
@@ -278,9 +349,7 @@
       toolId = "";
       commonId = "";
       document.querySelector("#platform").value = id;
-      document.querySelector("#placeholder").classList.add("hidden");
-      form.classList.add("hidden");
-      document.querySelector("#result").classList.add("hidden");
+      closeWork();
       renderPickers();
     }
 
@@ -290,8 +359,8 @@
       toolId = id;
       commonId = "";
       renderPickers();
+      closeWork();
       if (tool.ready && tool.id === "freight") {
-        document.querySelector("#placeholder").classList.add("hidden");
         form.classList.remove("hidden");
         if (!freightLoaded) loadMeta();
         return;
@@ -305,13 +374,48 @@
       toolId = "";
       commonId = id;
       renderPickers();
+      closeWork();
+      if (tool.ready && tool.id === "text-translate") {
+        textForm.classList.remove("hidden");
+        return;
+      }
+      if (tool.ready && tool.id === "video-translate") {
+        videoForm.classList.remove("hidden");
+        return;
+      }
       showPlaceholder(`${tool.name}是通用功能。${tool.summary}这一项还没接上。`);
+    }
+
+    function fillSelect(selector, options, selected) {
+      const node = document.querySelector(selector);
+      node.innerHTML = "";
+      options.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name;
+        option.selected = item.id === selected;
+        node.append(option);
+      });
+    }
+
+    function note(node, text, kind) {
+      node.className = kind || "";
+      node.textContent = text || "";
     }
 
     async function loadCatalog() {
       const response = await fetch("/api/catalog");
       catalog = await response.json();
       renderPickers();
+    }
+
+    async function loadLanguages() {
+      const response = await fetch("/api/translate/languages");
+      languages = await response.json();
+      fillSelect("#text-source", languages.source, "zh");
+      fillSelect("#text-target", languages.target, "en");
+      fillSelect("#video-source", languages.source, "zh");
+      fillSelect("#video-target", languages.target, "en");
     }
 
     async function loadMeta() {
@@ -449,7 +553,63 @@
       showMessage(warnings ? decodeURIComponent(warnings) : "运费表已下载。", warnings ? "note" : "note");
     });
 
+    textForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const box = document.querySelector("#text-message");
+      const button = document.querySelector("#text-submit");
+      note(box, "正在翻译。", "note");
+      button.disabled = true;
+      const data = new FormData(textForm);
+      const response = await fetch("/api/translate/text", { method: "POST", body: data });
+      const body = await response.json();
+      button.disabled = false;
+      if (!response.ok) {
+        note(box, body.error || "没有翻译出来", "error");
+        return;
+      }
+      const sourceName = ((languages && languages.source.find((item) => item.id === body.source)) || {}).name || body.source;
+      note(box, `输入语言：${sourceName}`, "note");
+      document.querySelector("#text-output").textContent = body.translation;
+    });
+
+    document.querySelector("#video-file").addEventListener("change", () => {
+      const file = document.querySelector("#video-file").files[0];
+      document.querySelector("#video-file-note").textContent = file ? `已选择 ${file.name}，${file.size} 字节。` : "";
+    });
+
+    videoForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const box = document.querySelector("#video-message");
+      const button = document.querySelector("#video-submit");
+      const file = document.querySelector("#video-file").files[0];
+      if (!file) {
+        note(box, "请上传视频", "error");
+        return;
+      }
+      note(box, "正在听视频并翻译，请稍等。", "note");
+      button.disabled = true;
+      document.querySelector("#video-result").classList.add("hidden");
+      const data = new FormData(videoForm);
+      data.set("file", file);
+      const response = await fetch("/api/translate/video", { method: "POST", body: data });
+      const body = await response.json();
+      button.disabled = false;
+      if (!response.ok) {
+        note(box, body.error || "没有翻译出来", "error");
+        return;
+      }
+      note(box, `已翻译。输入语言：${body.source_name}，输出语言：${body.target_name}。`, "note");
+      document.querySelector("#video-transcript").textContent = body.transcript;
+      document.querySelector("#video-translation").textContent = body.translation;
+      const url = `/api/translate/video/${body.video_id}`;
+      const player = document.querySelector("#video-player");
+      player.src = url;
+      document.querySelector("#video-download").href = url;
+      document.querySelector("#video-result").classList.remove("hidden");
+    });
+
     loadCatalog();
+    loadLanguages();
   </script>
 </body>
 </html>
