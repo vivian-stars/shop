@@ -174,6 +174,8 @@ def _prepare_weight(
 ) -> Decimal:
     billable = product.weight_g
     divisor, scope = _volume_rule(channel, pool, category)
+    if not isinstance(divisor, Decimal):
+        divisor = None
     if divisor and (scope == "all" or (scope == "large" and category == "large")):
         billable = max(billable, _volumetric_g(product, divisor))
     minimum = country.min_g or channel.rules.country_min_g.get(country.name)

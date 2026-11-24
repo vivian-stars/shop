@@ -35,15 +35,12 @@ def read_rate_book(payload: bytes, source_name: str) -> RateBook:
 
 def parse_sheet(sheet) -> Channel:
     grid, max_row, max_col = _grid(sheet)
-    header_rows = [
-        row
-        for row in range(1, max_row + 1)
-        if _is_header_row(grid, row, max_col)
-    ]
+    header_rows = _collapse_header_rows(
+        [row for row in range(1, max_row + 1) if _is_header_row(grid, row, max_col)]
+    )
     preamble = _note_text(grid, 1, header_rows[0] - 1 if header_rows else 0, max_col)
     channel = Channel(name=sheet.title, rules=parse_rules(preamble))
-    if "燃油" in preamble:
-        channel.warning = "报价不含燃油附加费"
+    channel.warning = channel.rules.warning
     previous = 0
     for index, header_row in enumerate(header_rows):
         next_header = header_rows[index + 1] if index + 1 < len(header_rows) else max_row + 1
@@ -52,7 +49,8 @@ def parse_sheet(sheet) -> Channel:
         if _is_row_band_header(grid, header_row, max_col):
             last = _parse_row_bands(grid, header_row, next_header, max_col, rules, channel)
         else:
-            last = _parse_matrix(grid, header_row, next_header, max_col, rules, channel)
+            block_end = _header_block_end(grid, header_row, next_header, max_col)
+            last = _parse_matrix(grid, header_row, next_header, max_col, rules, channel, block_end)
         trailing = parse_rules(_note_text(grid, last + 1, next_header - 1, max_col))
         if trailing.vol_divisor or trailing.country_min_g or trailing.warning:
             channel.rules = channel.rules.merge(trailing)
@@ -94,7 +92,7 @@ def parse_rules(text: str) -> Rules:
         for name in match.group(1).split("、"):
             if name:
                 rules.country_min_g[name] = kilos
-    if "燃油" in compact:
+    if "燃油" in compact and any(word in compact for word in ("不含", "未含", "另计", "另收")):
         rules.warning = "报价不含燃油附加费"
     return rules
 
@@ -117,16 +115,16 @@ def _assign_size_mode(channel: Channel) -> None:
     rules.switch_weight_g = None
 
 
-def _parse_matrix(grid, header_row, next_header, max_col, rules: Rules, channel: Channel) -> int:
-    fee_row = _fee_row(grid, header_row, min(header_row + 4, next_header - 1), max_col)
-    columns = _column_specs(grid, header_row, fee_row, max_col)
+def _parse_matrix(grid, header_row, next_header, max_col, rules: Rules, channel: Channel, block_end: int) -> int:
+    fee_row = _fee_row(grid, header_row, block_end, max_col)
+    columns = _column_specs(grid, header_row, fee_row, max_col, block_end)
     name_col, code_col = _identity_columns(grid, header_row, max_col)
     min_col = next((col.index for col in columns if col.kind == "min_weight"), None)
-    last = fee_row
+    last = block_end
     blanks = 0
-    for row in range(fee_row + 1, next_header):
+    for row in range(block_end + 1, next_header):
         name = _text(grid.get((row, name_col)))
-        if _is_header_text(name):
+        if _is_header_text(name) or name.endswith("列表"):
             break
         prices = _row_has_price(grid, row, columns)
         if not name and not prices:
@@ -196,8 +194,10 @@ def _parse_row_bands(grid, header_row, next_header, max_col, rules: Rules, chann
         divisor = rules.vol_divisor
         if bubble_flag and _text(grid.get((row, bubble_flag))) not in {"", "是"}:
             divisor = None
-        if bubble_col and _price(grid.get((row, bubble_col))) is not None:
-            divisor = _price(grid.get((row, bubble_col)))
+        if bubble_col:
+            coefficient = _price(grid.get((row, bubble_col)))
+            if isinstance(coefficient, Decimal):
+                divisor = coefficient
         local = Rules(
             vol_divisor=divisor,
             vol_scope="all" if divisor else "none",
@@ -307,9 +307,39 @@ class _Column:
         self.pair = index
 
 
-def _column_specs(grid, header_row, fee_row, max_col) -> list[_Column]:
+def _collapse_header_rows(rows: list[int]) -> list[int]:
+    """纵向合并会让表头占连续几行，只保留这一段的第一行。"""
+    kept: list[int] = []
+    last = None
+    for row in rows:
+        if last is not None and row <= last + 1:
+            last = row
+            continue
+        kept.append(row)
+        last = row
+    return kept
+
+
+def _header_block_end(grid, header_row: int, next_header: int, max_col: int) -> int:
+    """表头「运达国家」常纵向合并，重量段在下面一两行。"""
+    name_col, _ = _identity_columns(grid, header_row, max_col)
+    end = header_row
+    for row in range(header_row + 1, min(header_row + 5, next_header)):
+        name = _text(grid.get((row, name_col)))
+        blob = " ".join(_text(grid.get((row, col))) for col in range(1, max_col + 1))
+        continuation = _is_header_text(name) or (
+            not name and any(word in blob for word in ("配送服务费", "挂号", "首重", "续重", "g(含)", "克", "以内"))
+        )
+        if not continuation:
+            break
+        end = row
+    return end
+
+
+def _column_specs(grid, header_row, fee_row, max_col, scan_end: int | None = None) -> list[_Column]:
+    scan_end = fee_row if scan_end is None else scan_end
     unit_kg = False
-    for row in range(header_row, fee_row + 1):
+    for row in range(header_row, scan_end + 1):
         for col in range(1, max_col + 1):
             if "单位：kg" in _text(grid.get((row, col))).lower() or "单位:kg" in _text(grid.get((row, col))).lower():
                 unit_kg = True
@@ -321,12 +351,21 @@ def _column_specs(grid, header_row, fee_row, max_col) -> list[_Column]:
     last_label = ""
     last_kind = ""
     for col in range(1, max_col + 1):
-        texts = [_text(grid.get((row, col))) for row in range(header_row, fee_row + 1)]
+        texts = [_text(grid.get((row, col))) for row in range(header_row, scan_end + 1)]
         blob = " ".join(part for part in texts if part)
         if not blob:
             continue
-        fee_text = _text(grid.get((fee_row, col)))
-        kind = _kind(fee_text or blob)
+        fee_text = ""
+        kind = None
+        for text in texts:
+            found = _kind(text)
+            if found:
+                kind = found
+                fee_text = text
+                break
+        if kind is None:
+            fee_text = _text(grid.get((fee_row, col)))
+            kind = _kind(fee_text or blob)
         if kind is None and "最低计费" in blob:
             kind = "min_weight"
         point = _weight_point(fee_text) or _weight_point(blob)

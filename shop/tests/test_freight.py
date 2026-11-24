@@ -63,11 +63,36 @@ def test_weight_band_boundary_and_special_cargo():
     assert special.freight == Decimal("46.11")
 
 
-def test_korea_over_size_cannot_ship_and_zero_cost_keeps_freight():
-    blocked = _quote("韩国", _product(spec="50x30x20"))
+def test_oversize_without_large_rate_and_zero_cost_keeps_freight():
+    blocked = _quote("玻利维亚", _product(spec="50x30x20"))
     plain = _quote("澳大利亚", _product(), costs=Costs(0, 0, 0, 0, 0, 0))
+    korea = _quote("韩国", _product(spec="50x30x20"), costs=Costs(0, 0, 0, 0, 0, 0))
     assert blocked.shippable is False
     assert plain.final_freight == plain.freight == Decimal("37.32")
+    assert korea.shippable
+    assert korea.freight == Decimal("62.20")
+
+
+def test_uploaded_book_includes_special_and_commercial_channels():
+    names = _book().channel_names()
+    for name in (
+        "无忧物流-特货标准",
+        "无忧物流-特货标快",
+        "特货专线－简易",
+        "燕文航空挂号小包",
+        "4PX新邮挂号小包",
+        "中邮e邮宝",
+        "无忧物流-优先",
+    ):
+        assert name in names
+    assert "目录" not in names
+    standard = _quote("俄罗斯", _product(), channel="无忧物流-特货标准")
+    express = _quote("俄罗斯", _product(), channel="无忧物流-特货标快")
+    assert standard.freight == Decimal("36.30")
+    assert standard.detail.startswith("标准计费 150~300g")
+    assert express.freight == Decimal("40.00")
+    bahrain = _quote("巴林", _product(), channel="无忧物流-特货标准")
+    assert bahrain.freight == Decimal("34.60")
 
 
 def test_minimum_weight_sea_and_oversized_rounding():
@@ -147,7 +172,7 @@ def test_missing_product_message_and_quantity_export():
     assert sheet.cell(brazil, 5).value == "卖家承担"
     assert sheet.cell(brazil, 11).value is None
     assert sheet.cell(argentina, 5).value == "按数量计费"
-    assert sheet.cell(argentina, 11).value is None
+    assert sheet.cell(argentina, 11).value == 77.36
     assert sheet.cell(australia, 9).value == 1
     assert sheet.cell(australia, 10).value == 5
     assert sheet.cell(australia, 11).value == 50.38

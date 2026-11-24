@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from shop.shopapp.models import RateBook
 from shop.shopapp.platforms import get_platform
-from shop.shopapp.platforms.aliexpress.sample_book import build_all
+from shop.shopapp.platforms.aliexpress.sample_book import build_rate_book, build_templates
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 
@@ -19,8 +19,10 @@ class RateStore:
 
     def load_default(self) -> str:
         path = DATA / "default_rates.xlsx"
-        if not path.exists() or not (DATA / "template_qty.xlsx").exists():
-            build_all()
+        if not (DATA / "template_qty.xlsx").exists() or not (DATA / "template_weight.xlsx").exists():
+            build_templates()
+        if not path.exists():
+            build_rate_book()
         payload = path.read_bytes()
         book = get_platform("aliexpress").read_book(payload, path.name)
         self.books["default"] = ("aliexpress", book)

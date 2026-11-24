@@ -19,7 +19,7 @@ python -m shop.server
 
 页面可以上传新的物流费表。上传之后，渠道列表和全部计算都改用新表。
 
-`shop/data/default_rates.xlsx` 是一份工作摘录，国家少于完整的物流费表。要用全部国家的价格，请在页面上传完整的 `物流费.xlsx`。
+`shop/data/default_rates.xlsx` 是上传的物流费表，渠道是其中除「目录」以外的每个 sheet。这份表没有 DHL。页面再上传新表后，渠道和计算都改用新表。
 
 ## 测试
 
