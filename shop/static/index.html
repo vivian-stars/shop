@@ -81,20 +81,48 @@
     tr.no td { color: var(--muted); }
     .search { max-width: 240px; }
     .hidden { display: none; }
+    .pick { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pick button {
+      background: white;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .pick button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    .block { margin: 18px 0; }
+    .crumb { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+    .placeholder {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>电商工具</h1>
-    <p>按平台扩展，目前是速卖通运费。先选渠道，再填产品。运费按物流费表里的重量段和计费方式计算，结果保留两位小数。</p>
+    <p>先选平台，再选这个平台里的功能。通用功能单独放在平台后面。</p>
   </header>
   <main>
-    <form id="form">
-      <h2>平台和渠道</h2>
+    <section class="block">
+      <h2>平台</h2>
+      <div class="pick" id="platforms"></div>
+    </section>
+    <section class="block hidden" id="tool-block">
+      <p class="crumb" id="crumb"></p>
+      <h2>功能</h2>
+      <div class="pick" id="tools"></div>
+    </section>
+    <section class="block">
+      <h2>通用功能</h2>
+      <div class="pick" id="common"></div>
+    </section>
+    <section class="placeholder hidden" id="placeholder"></section>
+
+    <form id="form" class="hidden">
+      <h2>运费计算</h2>
+      <input type="hidden" name="platform" id="platform" value="aliexpress">
       <div class="grid">
-        <label>平台
-          <select id="platform" name="platform"></select>
-        </label>
         <label>运费表
           <input id="rate-file" type="file" accept=".xlsx,.xlsm">
         </label>
@@ -164,6 +192,11 @@
     const message = document.querySelector("#message");
     let rateId = "default";
     let lastPayload = null;
+    let catalog = null;
+    let platformId = "";
+    let toolId = "";
+    let commonId = "";
+    let freightLoaded = false;
 
     function showMessage(text, kind) {
       message.className = kind;
@@ -199,17 +232,92 @@
       });
     }
 
+    function button(label, on, handler) {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.textContent = label;
+      if (on) node.className = "on";
+      node.addEventListener("click", handler);
+      return node;
+    }
+
+    function renderPickers() {
+      const platforms = document.querySelector("#platforms");
+      platforms.innerHTML = "";
+      catalog.platforms.forEach((item) => {
+        platforms.append(button(item.name, item.id === platformId, () => selectPlatform(item.id)));
+      });
+      const common = document.querySelector("#common");
+      common.innerHTML = "";
+      catalog.common.forEach((item) => {
+        common.append(button(item.name, item.id === commonId, () => selectCommon(item.id)));
+      });
+      const toolBlock = document.querySelector("#tool-block");
+      const tools = document.querySelector("#tools");
+      tools.innerHTML = "";
+      const platform = catalog.platforms.find((item) => item.id === platformId);
+      toolBlock.classList.toggle("hidden", !platform);
+      if (!platform) return;
+      document.querySelector("#crumb").textContent = platform.name;
+      platform.tools.forEach((item) => {
+        const label = item.ready ? item.name : `${item.name}（未接上）`;
+        tools.append(button(label, item.id === toolId, () => selectTool(item.id)));
+      });
+    }
+
+    function showPlaceholder(text) {
+      const box = document.querySelector("#placeholder");
+      box.textContent = text;
+      box.classList.remove("hidden");
+      form.classList.add("hidden");
+      document.querySelector("#result").classList.add("hidden");
+    }
+
+    function selectPlatform(id) {
+      platformId = id;
+      toolId = "";
+      commonId = "";
+      document.querySelector("#platform").value = id;
+      document.querySelector("#placeholder").classList.add("hidden");
+      form.classList.add("hidden");
+      document.querySelector("#result").classList.add("hidden");
+      renderPickers();
+    }
+
+    function selectTool(id) {
+      const platform = catalog.platforms.find((item) => item.id === platformId);
+      const tool = platform.tools.find((item) => item.id === id);
+      toolId = id;
+      commonId = "";
+      renderPickers();
+      if (tool.ready && tool.id === "freight") {
+        document.querySelector("#placeholder").classList.add("hidden");
+        form.classList.remove("hidden");
+        if (!freightLoaded) loadMeta();
+        return;
+      }
+      showPlaceholder(`${platform.name}的${tool.name}还没接上。${tool.summary}现在可以用的是速卖通的运费计算。`);
+    }
+
+    function selectCommon(id) {
+      const tool = catalog.common.find((item) => item.id === id);
+      platformId = "";
+      toolId = "";
+      commonId = id;
+      renderPickers();
+      showPlaceholder(`${tool.name}是通用功能。${tool.summary}这一项还没接上。`);
+    }
+
+    async function loadCatalog() {
+      const response = await fetch("/api/catalog");
+      catalog = await response.json();
+      renderPickers();
+    }
+
     async function loadMeta() {
       const response = await fetch("/api/meta");
       const body = await response.json();
-      const select = document.querySelector("#platform");
-      select.innerHTML = "";
-      body.platforms.forEach((item) => {
-        const option = document.createElement("option");
-        option.value = item.id;
-        option.textContent = item.name;
-        select.append(option);
-      });
+      freightLoaded = true;
       rateId = body.rate_id;
       document.querySelector("#rate-note").textContent = `当前运费表：${body.source_name}。上传新的物流费表后，全部计算改用新表。`;
       renderChannels(body.channels);
@@ -219,7 +327,7 @@
       const file = event.target.files[0];
       if (!file) return;
       const data = new FormData();
-      data.set("platform", document.querySelector("#platform").value);
+      data.set("platform", document.querySelector("#platform").value || "aliexpress");
       data.set("file", file);
       const response = await fetch("/api/rates", { method: "POST", body: data });
       const body = await response.json();
@@ -341,7 +449,7 @@
       showMessage(warnings ? decodeURIComponent(warnings) : "运费表已下载。", warnings ? "note" : "note");
     });
 
-    loadMeta();
+    loadCatalog();
   </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-"""运费计算接口。"""
+"""电商工具接口。运费计算是速卖通下的一项功能。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from shop.shopapp.catalog import catalog_payload, platform_by_id, tool_by_id
 from shop.shopapp.models import Costs
 from shop.shopapp.money import money
-from shop.shopapp.platforms import PLATFORMS, get_platform
+from shop.shopapp.platforms import get_platform
 from shop.shopapp.products import MISSING, product_from_fields, products_from_excel
 from shop.shopapp.store import DATA, RateStore
 
-app = FastAPI(title="运费计算")
+app = FastAPI(title="电商工具")
 STORE = RateStore()
 STATIC = DATA.parent / "static"
 
@@ -27,11 +28,16 @@ def health():
     return {"ok": True}
 
 
+@app.get("/api/catalog")
+def catalog():
+    return catalog_payload()
+
+
 @app.get("/api/meta")
 def meta():
     platform_id, book = STORE.get("default")
     return {
-        "platforms": [{"id": item.id, "name": item.name} for item in PLATFORMS.values()],
+        "platforms": [{"id": item["id"], "name": item["name"]} for item in catalog_payload()["platforms"]],
         "rate_id": "default",
         "source_name": book.source_name,
         "channels": _channel_payload(platform_id, book),
@@ -44,6 +50,7 @@ async def upload_rates(
     platform: str = Form("aliexpress"),
     file: UploadFile = File(...),
 ):
+    _require_freight(platform)
     payload = await file.read()
     if not payload:
         raise HTTPException(400, "请上传运费表")
@@ -74,6 +81,7 @@ async def quote(
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
 ):
+    _require_freight(platform)
     try:
         platform_id, book, products, costs = await _inputs(
             platform,
@@ -126,6 +134,7 @@ async def export_file(
 ):
     if mode not in {"quantity", "weight"}:
         raise HTTPException(400, "请选择按数量计费或按重量计费")
+    _require_freight(platform)
     try:
         platform_id, book, products, costs = await _inputs(
             platform,
@@ -223,6 +232,15 @@ async def _inputs(platform, rate_id, sku, spec, weight, products_file, platform_
         loss=_percent(loss_fee, "0.10"),
     )
     return platform_id, book, products, costs
+
+
+def _require_freight(platform: str) -> None:
+    spec = platform_by_id(platform or "aliexpress")
+    if spec is None:
+        raise HTTPException(400, "没有这个平台")
+    tool = tool_by_id(spec, "freight")
+    if tool is None or not tool.ready:
+        raise HTTPException(400, f"{spec.name}的运费计算还没接上")
 
 
 def _channels(book, channels: list[str]) -> list[str]:

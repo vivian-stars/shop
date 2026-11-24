@@ -257,3 +257,24 @@ def test_uploaded_rate_book_replaces_the_default():
     row = quoted.json()["products"][0]["rows"][0]
     assert row["freight"] == "11.00"
     assert row["final_freight"] == "11.00"
+
+
+def test_catalog_lists_platforms_before_freight_and_keeps_common_tools():
+    body = client.get("/api/catalog").json()
+    assert [item["name"] for item in body["platforms"]] == ["速卖通", "虾皮", "希音", "亚马逊"]
+    aliexpress = body["platforms"][0]
+    assert [(item["id"], item["ready"]) for item in aliexpress["tools"]] == [
+        ("freight", True),
+        ("assets", False),
+    ]
+    assert all(item["tools"][0]["ready"] is False for item in body["platforms"][1:])
+    assert [(item["id"], item["ready"]) for item in body["common"]] == [
+        ("text-translate", False),
+        ("video-translate", False),
+    ]
+    refused = client.post(
+        "/api/quote",
+        data={"platform": "shopee", "channels": "无忧物流-标准", "sku": "A", "spec": "10x10x10", "weight": "100"},
+    )
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "虾皮的运费计算还没接上"

@@ -1,8 +1,10 @@
 # 电商工具
 
-按平台扩展的电商工具站。目前只有速卖通运费。
+先选平台，再选功能。平台有速卖通、虾皮、希音、亚马逊。每个平台下面有运费计算、素材生成。现在接上的只有速卖通的运费计算。
 
-新平台在 `shop/shopapp/platforms/` 增加一个包，实现 `shop/shopapp/platforms/base.py` 里的接口，再在 `shop/shopapp/platforms/__init__.py` 注册。计算页面不用改。
+文字翻译和视频翻译是通用功能，记在 `shop/shopapp/catalog.py`，不挂在某个平台下面。
+
+新平台加在这份目录里。某个平台的运费要真正计算时，再在 `shop/shopapp/platforms/` 增加实现，并把该功能的 `ready` 改成 true。
 
 ## 运行
 
