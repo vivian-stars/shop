@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>电商工具</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #5e584f;
+      --line: #e4ddd2;
+      --paper: #f7f4ee;
+      --card: #fffdf9;
+      --accent: #0f6e6a;
+      --accent-ink: #ffffff;
+      --warn: #8a3b12;
+      --warn-bg: #fff1e8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; }
+    h1 { margin: 0 0 6px; font-size: 28px; font-weight: 650; letter-spacing: 0; }
+    header p { margin: 0; color: var(--muted); }
+    form, .result {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+      margin: 16px 0;
+    }
+    h2 { margin: 0 0 12px; font-size: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    input, select, button { font: inherit; }
+    input[type="text"], input[type="number"], select {
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+    .channels, .toggles { display: flex; flex-wrap: wrap; gap: 8px; }
+    .channels label, .toggles label {
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: white;
+      color: var(--ink);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 14px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      cursor: pointer;
+    }
+    button.secondary { background: white; color: var(--ink); border: 1px solid var(--line); }
+    .error, .note {
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-top: 12px;
+    }
+    .error { background: var(--warn-bg); color: var(--warn); }
+    .note { background: #eef6f5; color: #134e4b; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr.no td { color: var(--muted); }
+    .search { max-width: 240px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>电商工具</h1>
+    <p>按平台扩展，目前是速卖通运费。先选渠道，再填产品。运费按物流费表里的重量段和计费方式计算，结果保留两位小数。</p>
+  </header>
+  <main>
+    <form id="form">
+      <h2>平台和渠道</h2>
+      <div class="grid">
+        <label>平台
+          <select id="platform" name="platform"></select>
+        </label>
+        <label>运费表
+          <input id="rate-file" type="file" accept=".xlsx,.xlsm">
+        </label>
+      </div>
+      <p class="hint" id="rate-note"></p>
+      <div class="channels" id="channels"></div>
+      <p class="hint">运送渠道可以多选。页面默认只展示无忧物流-标准，其他已选渠道可以再勾上。</p>
+
+      <h2>成本比例</h2>
+      <div class="grid">
+        <label>平台佣金（%）<input name="platform_fee" value="8" inputmode="decimal"></label>
+        <label>联盟佣金（%）<input name="affiliate_fee" value="10" inputmode="decimal"></label>
+        <label>金币佣金（%）<input name="coin_fee" value="5" inputmode="decimal"></label>
+        <label>一站推费用（%）<input name="one_stop_fee" value="2" inputmode="decimal"></label>
+        <label>广告费用（%）<input name="ads_fee" value="0" inputmode="decimal"></label>
+        <label>损耗（%）<input name="loss_fee" value="10" inputmode="decimal"></label>
+      </div>
+      <p class="hint">留空就用默认值。全部改成 0 时，最终运费等于产品运费。</p>
+
+      <h2>产品</h2>
+      <div class="grid">
+        <label>货物类型
+          <select name="cargo">
+            <option value="general">普货</option>
+            <option value="special">非普货（带电 / 非液体化妆品）</option>
+          </select>
+        </label>
+        <label>SKU 编号<input name="sku" id="sku" placeholder="例如 SKU-001"></label>
+        <label>产品规格（cm）<input name="spec" id="spec" placeholder="60x40x20"></label>
+        <label>产品重量（g）<input name="weight" id="weight" placeholder="100 或 100g"></label>
+      </div>
+      <p class="hint">规格按长 x 宽 x 高填写，例如 60x40x20。也可以改为上传表格，表格需要三列：sku编号、产品规格、产品重量。</p>
+      <label>批量导入产品
+        <input id="products-file" type="file" accept=".xlsx,.xlsm">
+      </label>
+
+      <h2>输出</h2>
+      <div class="channels">
+        <label><input type="radio" name="mode" value="quantity" checked> 按数量计费</label>
+        <label><input type="radio" name="mode" value="weight"> 按重量计费</label>
+      </div>
+      <div class="grid" id="qty-fields">
+        <label>起始采购数<input name="qty_start" inputmode="numeric" placeholder="1"></label>
+        <label>截止采购数<input name="qty_end" inputmode="numeric" placeholder="5"></label>
+        <label>每增加定额产品采购量<input name="qty_step" value="1" inputmode="numeric"></label>
+      </div>
+      <p class="hint">按数量计费时，卖家承担和不发货的国家留空。首批采购费是产品最终运费，增加运费只计配送费，不含挂号费。</p>
+      <div class="actions">
+        <button type="submit" id="calc">计算运费</button>
+        <button type="button" class="secondary" id="download">下载运费表</button>
+      </div>
+      <div id="message"></div>
+    </form>
+
+    <section class="result hidden" id="result">
+      <h2>计算结果</h2>
+      <p class="hint" id="formula"></p>
+      <div class="toggles" id="show-channels"></div>
+      <label>筛选国家
+        <input class="search" id="search" placeholder="国家名">
+      </label>
+      <div id="tables"></div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector("#form");
+    const message = document.querySelector("#message");
+    let rateId = "default";
+    let lastPayload = null;
+
+    function showMessage(text, kind) {
+      message.className = kind;
+      message.textContent = text || "";
+      if (!text) message.className = "";
+    }
+
+    function selectedChannels() {
+      return [...document.querySelectorAll("#channels input:checked")].map((item) => item.value);
+    }
+
+    function formData() {
+      const data = new FormData(form);
+      data.delete("channels");
+      selectedChannels().forEach((name) => data.append("channels", name));
+      data.set("rate_id", rateId);
+      const productFile = document.querySelector("#products-file").files[0];
+      if (productFile) data.set("products_file", productFile);
+      return data;
+    }
+
+    function renderChannels(channels) {
+      const box = document.querySelector("#channels");
+      box.innerHTML = "";
+      channels.forEach((channel) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = channel.name;
+        input.checked = channel.name === "无忧物流-标准";
+        label.append(input, document.createTextNode(`${channel.name}（${channel.countries}国${channel.currencies.includes("USD") ? "，USD" : ""}）`));
+        box.append(label);
+      });
+    }
+
+    async function loadMeta() {
+      const response = await fetch("/api/meta");
+      const body = await response.json();
+      const select = document.querySelector("#platform");
+      select.innerHTML = "";
+      body.platforms.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name;
+        select.append(option);
+      });
+      rateId = body.rate_id;
+      document.querySelector("#rate-note").textContent = `当前运费表：${body.source_name}。上传新的物流费表后，全部计算改用新表。`;
+      renderChannels(body.channels);
+    }
+
+    document.querySelector("#rate-file").addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const data = new FormData();
+      data.set("platform", document.querySelector("#platform").value);
+      data.set("file", file);
+      const response = await fetch("/api/rates", { method: "POST", body: data });
+      const body = await response.json();
+      if (!response.ok) {
+        showMessage(body.error || "运费表没有读成功", "error");
+        return;
+      }
+      rateId = body.rate_id;
+      document.querySelector("#rate-note").textContent = `当前运费表：${body.source_name}。之后的计算都用这份表。`;
+      renderChannels(body.channels);
+      showMessage("已换上新的运费表。", "note");
+    });
+
+    document.querySelectorAll("input[name=mode]").forEach((input) => {
+      input.addEventListener("change", () => {
+        document.querySelector("#qty-fields").classList.toggle("hidden", input.value === "weight" && input.checked);
+      });
+    });
+
+    function renderResult(body) {
+      const section = document.querySelector("#result");
+      section.classList.remove("hidden");
+      const multiplier = body.multiplier;
+      document.querySelector("#formula").textContent =
+        `产品运费 = 计费重量(kg) × 配送服务费 + 挂号服务费。大包如果是首重加续重，就按表头的首重和每档续重计算。产品最终运费 = 产品运费 × ${multiplier}。`;
+      const names = [];
+      body.products.forEach((product) => {
+        product.rows.forEach((row) => {
+          if (!names.includes(row.channel)) names.push(row.channel);
+        });
+      });
+      const toggles = document.querySelector("#show-channels");
+      toggles.innerHTML = "";
+      names.forEach((name) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.value = name;
+        input.checked = name === "无忧物流-标准" || (names.length === 1);
+        if (!names.includes("无忧物流-标准") && name === names[0]) input.checked = true;
+        input.addEventListener("change", draw);
+        label.append(input, document.createTextNode(name));
+        toggles.append(label);
+      });
+      lastPayload = body;
+      draw();
+    }
+
+    function draw() {
+      const shown = new Set([...document.querySelectorAll("#show-channels input:checked")].map((item) => item.value));
+      const keyword = document.querySelector("#search").value.trim();
+      const root = document.querySelector("#tables");
+      root.innerHTML = "";
+      lastPayload.products.forEach((product) => {
+        const title = document.createElement("h2");
+        title.textContent = `${product.sku}　${product.spec} cm　${product.weight_g}g`;
+        const table = document.createElement("table");
+        table.innerHTML = "<thead><tr><th>渠道</th><th>国家</th><th>计费重量</th><th>配送服务费</th><th>挂号费</th><th>产品运费</th><th>产品最终运费</th><th>增加运费</th><th>说明</th></tr></thead>";
+        const body = document.createElement("tbody");
+        product.rows
+          .filter((row) => shown.has(row.channel))
+          .filter((row) => !keyword || row.country.includes(keyword))
+          .forEach((row) => {
+            const tr = document.createElement("tr");
+            if (!row.shippable) tr.className = "no";
+            const rate = row.mode === "first" ? `首重 ${row.first_fee}` : (row.rate_per_kg || "—");
+            const reg = row.mode === "first" ? `续重 ${row.additional_fee}` : (row.registration || "—");
+            const step = Number(document.querySelector("[name=qty_step]").value || "1");
+            const quantityMode = document.querySelector("input[name=mode]:checked").value === "quantity";
+            const extra = row.extra_freight && quantityMode ? (Math.round(Number(row.extra_freight) * 100 * step) / 100).toFixed(2) : (row.extra_freight || "—");
+            tr.innerHTML = `<td>${row.channel}</td><td>${row.country}</td><td>${row.billable_g ? row.billable_g + "g" : "—"}</td><td>${rate}</td><td>${reg}</td><td>${row.freight || "—"}</td><td>${row.final_freight || "—"}</td><td>${extra}</td><td>${row.detail}${row.currency === "USD" ? "（USD）" : ""}</td>`;
+            body.append(tr);
+          });
+        table.append(body);
+        root.append(title, table);
+        product.warnings.forEach((text) => {
+          const note = document.createElement("p");
+          note.className = "hint";
+          note.textContent = text;
+          root.append(note);
+        });
+      });
+    }
+
+    document.querySelector("#search").addEventListener("input", () => {
+      if (lastPayload) draw();
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      showMessage("", "");
+      const response = await fetch("/api/quote", { method: "POST", body: formData() });
+      const body = await response.json();
+      if (!response.ok) {
+        showMessage(body.error || "没有算出来", "error");
+        return;
+      }
+      showMessage("", "");
+      renderResult(body);
+    });
+
+    document.querySelector("#download").addEventListener("click", async () => {
+      showMessage("", "");
+      const response = await fetch("/api/export", { method: "POST", body: formData() });
+      if (!response.ok) {
+        const body = await response.json();
+        showMessage(body.error || "没有导出", "error");
+        return;
+      }
+      const blob = await response.blob();
+      const match = /filename\*=UTF-8''([^;]+)/.exec(response.headers.get("Content-Disposition") || "");
+      const filename = match ? decodeURIComponent(match[1]) : "运费表.xlsx";
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      const warnings = response.headers.get("X-Export-Warnings");
+      showMessage(warnings ? decodeURIComponent(warnings) : "运费表已下载。", warnings ? "note" : "note");
+    });
+
+    loadMeta();
+  </script>
+</body>
+</html>
