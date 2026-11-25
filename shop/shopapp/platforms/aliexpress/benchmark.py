@@ -55,10 +55,11 @@ class BenchmarkRow:
 
 
 def infer_benchmark(rows, commission_rate: Decimal) -> BenchmarkChoice:
-    """包邮基准取买家包邮国家实际运费降序后的正中间，再去掉小数。
+    """包邮基准取买家包邮国家实际运费从低到高排列后的正中间，再去掉小数。
 
     买家包邮包括成本不超过基准的国家，以及区域调价国家。基准和这组国家互相决定，
-    取能对上的那个整数。45 个国家时正中间是第 23 个；0.3 千克普货、佣金 20% 时是比利时。
+    取能对上的那个整数。国家数为奇数时，从低到高和从高到低的正中间是同一个国家。
+    45 个国家时是第 23 个；0.3 千克普货、佣金 20% 时是比利时。
     """
     prepared = [_prepared_freight(item, commission_rate) for item in rows if item.currency != "USD"]
     prepared = [item for item in prepared if item is not None]
@@ -147,7 +148,7 @@ def _middle_choice(prepared, benchmark: Decimal) -> BenchmarkChoice | None:
     chosen = [item for item in prepared if item[2] or item[1] <= benchmark]
     if not chosen:
         return None
-    chosen.sort(key=lambda item: (-item[0], item[3]))
+    chosen.sort(key=lambda item: (item[0], item[3]))
     freight, _total, _regional, name = chosen[len(chosen) // 2]
     return BenchmarkChoice(_floor_yuan(freight), name, freight)
 

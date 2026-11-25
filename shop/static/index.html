@@ -338,7 +338,7 @@
 
     function refreshCostNote() {
       document.querySelector("#cost-note").textContent =
-        `佣金比例是这六项相加，当前合计 ${costPercent()}%。改任何一项，运费成本都按新的合计计算。包邮基准按包邮国家实际运费的正中间自动取整，不用填写。`;
+        `佣金比例是这六项相加，当前合计 ${costPercent()}%。改任何一项，运费成本都按新的合计计算。包邮基准把包邮国家的实际运费从低到高排列，取正中间再去掉小数，不用填写。`;
     }
 
     function renderChannels(channels) {

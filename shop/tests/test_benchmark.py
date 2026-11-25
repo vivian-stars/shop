@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from shop.shopapp.api import app
 from shop.shopapp.models import Costs, Product
-from shop.shopapp.platforms.aliexpress.benchmark import benchmark_rows
+from shop.shopapp.platforms.aliexpress.benchmark import _middle_choice, benchmark_rows
 from shop.shopapp.platforms.aliexpress.calc import quote_products
 from shop.shopapp.store import RateStore
 
@@ -45,6 +45,19 @@ def test_benchmark_comes_from_the_middle_free_shipping_country():
     assert choice["channel"] == "无忧物流-标准"
     assert choice["amount"] == "45"
     assert choice["country"] == "比利时"
+
+
+def test_even_count_takes_the_later_middle_country_from_low_to_high():
+    prepared = [
+        (Decimal("40"), Decimal("40"), False, "丁"),
+        (Decimal("10"), Decimal("10"), False, "甲"),
+        (Decimal("30"), Decimal("30"), False, "丙"),
+        (Decimal("20"), Decimal("20"), False, "乙"),
+    ]
+    choice = _middle_choice(prepared, Decimal("100"))
+    assert choice.country == "丙"
+    assert choice.freight == Decimal("30")
+    assert choice.amount == Decimal("30")
 
 
 def test_australia_matches_gina_sheet():
@@ -186,7 +199,7 @@ def test_batch_file_exports_one_workbook_per_sku():
     assert response.headers["content-type"].startswith("application/zip")
     archive = ZipFile(BytesIO(response.content))
     names = sorted(archive.namelist())
-    assert names == ["300g 普货 包邮基准45元-SKU-A.xlsx", "300g 普货 包邮基准45元-SKU-B.xlsx"]
+    assert names == ["300g 普货 包邮基准45元-SKU-A.xlsx", "300g 普货 包邮基准46元-SKU-B.xlsx"]
     totals = {}
     for name in names:
         sheet = load_workbook(BytesIO(archive.read(name)))["无忧物流-标准"]
