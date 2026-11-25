@@ -80,7 +80,8 @@ def workbook_bytes(quotes: list[ProductQuote], benchmark: Decimal, commission_ra
                 [row for row in quote.rows if row.channel == channel],
                 quote.warnings,
             )
-            rows = benchmark_rows(subset, benchmark, commission_rate)
+            rate = subset.product.costs.commission_rate() if subset.product.costs is not None else commission_rate
+            rows = benchmark_rows(subset, benchmark, rate)
             title = channel if single else f"{quote.product.sku}-{channel}"
             sheet = book.create_sheet(_unique_title(used, title))
             _write_main(sheet, rows, quote.product.weight_g)

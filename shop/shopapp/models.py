@@ -15,15 +15,39 @@ class Costs:
     ads: Decimal = Decimal("0")
     loss: Decimal = Decimal("0.10")
 
+    def commission_rate(self) -> Decimal:
+        return self.platform + self.affiliate + self.coin + self.one_stop + self.ads + self.loss
+
     def multiplier(self) -> Decimal:
-        return (
-            Decimal("1")
-            + self.platform
-            + self.affiliate
-            + self.coin
-            + self.one_stop
-            + self.ads
-            + self.loss
+        return Decimal("1") + self.commission_rate()
+
+
+@dataclass
+class CostOverrides:
+    platform: Decimal | None = None
+    affiliate: Decimal | None = None
+    coin: Decimal | None = None
+    one_stop: Decimal | None = None
+    ads: Decimal | None = None
+    loss: Decimal | None = None
+
+    def filled(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.platform, self.affiliate, self.coin, self.one_stop, self.ads, self.loss)
+        )
+
+    def resolve(self, base: Costs) -> Costs:
+        def pick(value: Decimal | None, default: Decimal) -> Decimal:
+            return default if value is None else value
+
+        return Costs(
+            platform=pick(self.platform, base.platform),
+            affiliate=pick(self.affiliate, base.affiliate),
+            coin=pick(self.coin, base.coin),
+            one_stop=pick(self.one_stop, base.one_stop),
+            ads=pick(self.ads, base.ads),
+            loss=pick(self.loss, base.loss),
         )
 
 
@@ -34,6 +58,9 @@ class Product:
     width_cm: Decimal
     height_cm: Decimal
     weight_g: Decimal
+    cargo: str = ""
+    cost_overrides: CostOverrides | None = None
+    costs: Costs | None = None
 
     @property
     def sum_cm(self) -> Decimal:

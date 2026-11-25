@@ -43,7 +43,7 @@ def quote_products(
             if "USD" in channel.currencies and "CNY" not in channel.currencies:
                 warnings.append(f"{channel.name} 的报价是美元，只在页面展示，不写入人民币运费模板")
             for country in channel.countries.values():
-                rows.append(quote_country(channel, country, product, cargo, costs))
+                rows.append(quote_country(channel, country, product, product.cargo or cargo, product.costs or costs))
         results.append(ProductQuote(product=product, rows=rows, warnings=warnings))
     return results
 

@@ -37,8 +37,10 @@ def export_files(
     qty_end: int | None,
     qty_step: int,
 ) -> list[ExportFile]:
-    if mode == "quantity" and (qty_start is None or qty_end is None):
-        raise ValueError("按数量计费需要填写起始采购数和截止采购数")
+    if mode == "quantity":
+        qty_start = 1 if qty_start is None else qty_start
+        qty_end = 5 if qty_end is None else qty_end
+        qty_step = qty_step or 1
     if mode == "quantity" and qty_start > qty_end:
         raise ValueError("起始采购数不能大于截止采购数")
     quotes = quote_products(book, products, channels, cargo, costs)

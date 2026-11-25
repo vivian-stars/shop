@@ -17,7 +17,7 @@ from shop.shopapp.models import Costs
 from shop.shopapp.money import money
 from shop.shopapp.platforms import get_platform
 from shop.shopapp.platforms.aliexpress.benchmark import benchmark_rows, workbook_bytes
-from shop.shopapp.products import MISSING, product_from_fields, products_from_excel
+from shop.shopapp.products import MISSING, product_from_fields, products_from_excel, sample_workbook
 from shop.shopapp.store import DATA, RateStore
 from shop.shopapp.translate.engine import translate_text
 from shop.shopapp.translate.languages import require_source, require_target, source_options, target_options
@@ -86,6 +86,16 @@ def translated_video(video_id: str):
     return FileResponse(path, media_type="video/mp4", filename="译文字幕视频.mp4")
 
 
+@app.get("/api/products/sample")
+def product_sample():
+    filename = urlquote("产品导入样例.xlsx")
+    return Response(
+        sample_workbook(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
 @app.get("/api/meta")
 def meta():
     platform_id, book = STORE.get("default")
@@ -94,7 +104,7 @@ def meta():
         "rate_id": "default",
         "source_name": book.source_name,
         "channels": _channel_payload(platform_id, book),
-        "costs": {"platform": 8, "affiliate": 10, "coin": 5, "one_stop": 2, "ads": 0, "loss": 10},
+        "costs": {"platform": 8, "affiliate": 10, "coin": 0, "one_stop": 2, "ads": 0, "loss": 0},
     }
 
 
@@ -127,6 +137,7 @@ async def quote(
     spec: str = Form(""),
     weight: str = Form(""),
     products_file: UploadFile | None = File(None),
+    product_mode: str = Form("single"),
     platform_fee: str = Form(""),
     affiliate_fee: str = Form(""),
     coin_fee: str = Form(""),
@@ -134,11 +145,10 @@ async def quote(
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
     benchmark: str = Form("45"),
-    commission_rate: str = Form("20"),
 ):
     _require_freight(platform)
     try:
-        benchmark_amount, commission = _benchmark_inputs(benchmark, commission_rate)
+        benchmark_amount = _benchmark_amount(benchmark)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -146,12 +156,14 @@ async def quote(
             spec,
             weight,
             products_file,
+            product_mode,
             platform_fee,
             affiliate_fee,
             coin_fee,
             one_stop_fee,
             ads_fee,
             loss_fee,
+            cargo,
         )
         names = _channels(book, channels)
         quotes = get_platform(platform_id).quote(book, products, names, cargo, costs)
@@ -164,8 +176,8 @@ async def quote(
     return {
         "multiplier": format(costs.multiplier(), "f"),
         "benchmark": _plain(benchmark_amount),
-        "commission_rate": _plain(commission),
-        "products": [_product_payload(item, benchmark_amount, commission) for item in quotes],
+        "commission_rate": _plain(costs.commission_rate()),
+        "products": [_product_payload(item, benchmark_amount) for item in quotes],
     }
 
 
@@ -179,10 +191,11 @@ async def export_file(
     spec: str = Form(""),
     weight: str = Form(""),
     products_file: UploadFile | None = File(None),
+    product_mode: str = Form("single"),
     mode: str = Form("quantity"),
     qty_start: str = Form(""),
     qty_end: str = Form(""),
-    qty_step: str = Form("1"),
+    qty_step: str = Form(""),
     platform_fee: str = Form(""),
     affiliate_fee: str = Form(""),
     coin_fee: str = Form(""),
@@ -190,13 +203,12 @@ async def export_file(
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
     benchmark: str = Form("45"),
-    commission_rate: str = Form("20"),
 ):
     if mode not in {"quantity", "weight", "benchmark"}:
         raise HTTPException(400, "请选择按数量计费或按重量计费")
     _require_freight(platform)
     try:
-        benchmark_amount, commission = _benchmark_inputs(benchmark, commission_rate)
+        benchmark_amount = _benchmark_amount(benchmark)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -204,23 +216,25 @@ async def export_file(
             spec,
             weight,
             products_file,
+            product_mode,
             platform_fee,
             affiliate_fee,
             coin_fee,
             one_stop_fee,
             ads_fee,
             loss_fee,
+            cargo,
         )
         names = _channels(book, channels)
         if mode == "benchmark":
             quotes = get_platform(platform_id).quote(book, products, names, cargo, costs)
-            content = workbook_bytes(quotes, benchmark_amount, commission)
-            weight_text = _weight_label(products)
-            cargo_label = "普货" if cargo == "general" else "非普货"
-            filename = f"{weight_text} {cargo_label} 包邮基准{_plain(benchmark_amount)}元.xlsx"
-            return _download(filename, content, [])
+            return _benchmark_download(quotes, benchmark_amount)
         start = _optional_int(qty_start)
+        if start is None:
+            start = 1
         end = _optional_int(qty_end)
+        if end is None:
+            end = 5
         step = _optional_int(qty_step) or 1
         files = get_platform(platform_id).export(
             book, products, names, cargo, costs, mode, start, end, step
@@ -266,15 +280,36 @@ def _channel_payload(platform_id: str, book):
     ]
 
 
-async def _inputs(platform, rate_id, sku, spec, weight, products_file, platform_fee, affiliate_fee, coin_fee, one_stop_fee, ads_fee, loss_fee):
+async def _inputs(platform, rate_id, sku, spec, weight, products_file, product_mode, platform_fee, affiliate_fee, coin_fee, one_stop_fee, ads_fee, loss_fee, cargo):
     try:
         platform_id, book = STORE.get(rate_id)
     except KeyError as exc:
         raise HTTPException(400, str(exc)) from exc
     if platform and platform != platform_id:
         raise HTTPException(400, "这份运费表不属于所选平台")
+    costs = Costs(
+        platform=_percent(platform_fee, "0.08"),
+        affiliate=_percent(affiliate_fee, "0.10"),
+        coin=_percent(coin_fee, "0"),
+        one_stop=_percent(one_stop_fee, "0.02"),
+        ads=_percent(ads_fee, "0"),
+        loss=_percent(loss_fee, "0"),
+    )
     products = []
-    if products_file is not None and products_file.filename:
+    batch = (product_mode or "single").strip() == "batch"
+    if batch:
+        if products_file is None or not products_file.filename:
+            raise HTTPException(400, "请上传产品表")
+        payload = await products_file.read()
+        if not payload:
+            raise HTTPException(400, "请上传产品表")
+        try:
+            products = products_from_excel(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not products:
+            raise HTTPException(400, "产品表里没有读到 SKU")
+    elif products_file is not None and products_file.filename:
         payload = await products_file.read()
         if payload:
             try:
@@ -291,15 +326,18 @@ async def _inputs(platform, rate_id, sku, spec, weight, products_file, platform_
             if not sku.strip() or not spec.strip() or not weight.strip():
                 message = MISSING
             raise HTTPException(400, message) from exc
-    costs = Costs(
-        platform=_percent(platform_fee, "0.08"),
-        affiliate=_percent(affiliate_fee, "0.10"),
-        coin=_percent(coin_fee, "0.05"),
-        one_stop=_percent(one_stop_fee, "0.02"),
-        ads=_percent(ads_fee, "0"),
-        loss=_percent(loss_fee, "0.10"),
-    )
+    _bind_products(products, cargo, costs)
     return platform_id, book, products, costs
+
+
+def _bind_products(products, cargo: str, costs: Costs) -> None:
+    chosen = "special" if cargo == "special" else "general"
+    for product in products:
+        product.cargo = product.cargo or chosen
+        if product.cost_overrides is not None and product.cost_overrides.filled():
+            product.costs = product.cost_overrides.resolve(costs)
+        else:
+            product.costs = costs
 
 
 def _require_freight(platform: str) -> None:
@@ -319,10 +357,16 @@ def _channels(book, channels: list[str]) -> list[str]:
 
 
 def _percent(raw: str, default: str) -> Decimal:
-    text = (raw or "").strip().replace("%", "")
+    text = (raw or "").strip().replace("%", "").replace("％", "")
     if text == "":
         return Decimal(default)
-    return Decimal(text) / Decimal("100")
+    try:
+        number = Decimal(text) / Decimal("100")
+    except Exception as exc:
+        raise HTTPException(400, "成本比例要填数字") from exc
+    if number < 0:
+        raise HTTPException(400, "成本比例要填数字")
+    return number
 
 
 def _optional_int(raw: str) -> int | None:
@@ -335,8 +379,9 @@ def _optional_int(raw: str) -> int | None:
         raise HTTPException(400, "采购数要填整数") from exc
 
 
-def _product_payload(item, benchmark: Decimal, commission: Decimal):
+def _product_payload(item, benchmark: Decimal):
     product = item.product
+    commission = product.costs.commission_rate() if product.costs is not None else Decimal("0")
     priced = {(row.channel, row.country): row for row in benchmark_rows(item, benchmark, commission)}
     rows = []
     for row in item.rows:
@@ -372,22 +417,63 @@ def _product_payload(item, benchmark: Decimal, commission: Decimal):
         })
     return {
         "sku": product.sku,
+        "cargo": "非普货" if product.cargo == "special" else "普货",
         "spec": f"{_num(product.length_cm)}x{_num(product.width_cm)}x{_num(product.height_cm)}",
         "weight_g": _num(product.weight_g),
+        "commission_percent": _plain(commission * Decimal("100")),
         "warnings": item.warnings,
         "rows": rows,
     }
 
 
-def _benchmark_inputs(benchmark: str, commission_rate: str) -> tuple[Decimal, Decimal]:
+def _benchmark_amount(benchmark: str) -> Decimal:
     try:
         amount = Decimal((benchmark or "").strip() or "45")
-        rate = Decimal((commission_rate or "").strip() or "20") / Decimal("100")
     except Exception as exc:
-        raise HTTPException(400, "包邮基准和佣金比例要填数字") from exc
-    if amount < 0 or rate < 0:
-        raise HTTPException(400, "包邮基准和佣金比例要填数字")
-    return amount, rate
+        raise HTTPException(400, "包邮基准要填数字") from exc
+    if amount < 0:
+        raise HTTPException(400, "包邮基准要填数字")
+    return amount
+
+
+def _benchmark_download(quotes, benchmark: Decimal) -> Response:
+    if len(quotes) == 1:
+        rate = quotes[0].product.costs.commission_rate()
+        content = workbook_bytes(quotes, benchmark, rate)
+        return _download(_benchmark_filename(quotes[0].product, benchmark, False), content, [])
+    buffer = io.BytesIO()
+    used: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for quote in quotes:
+            rate = quote.product.costs.commission_rate()
+            content = workbook_bytes([quote], benchmark, rate)
+            name = _unique_filename(used, _benchmark_filename(quote.product, benchmark, True))
+            archive.writestr(name, content)
+    return _download("运费表.zip", buffer.getvalue(), [])
+
+
+def _benchmark_filename(product, benchmark: Decimal, with_sku: bool) -> str:
+    cargo_label = "非普货" if product.cargo == "special" else "普货"
+    weight = str(int(product.weight_g)) if product.weight_g == product.weight_g.to_integral_value() else str(product.weight_g)
+    stem = f"{weight}g {cargo_label} 包邮基准{_plain(benchmark)}元"
+    if not with_sku:
+        return f"{stem}.xlsx"
+    sku = re.sub(r"[\\/:*?\"<>|]+", "_", product.sku).strip() or "SKU"
+    return f"{stem}-{sku}.xlsx"
+
+
+def _unique_filename(used: set[str], name: str) -> str:
+    if name not in used:
+        used.add(name)
+        return name
+    stem, dot, suffix = name.rpartition(".")
+    number = 2
+    while True:
+        candidate = f"{stem}-{number}.{suffix}" if dot else f"{name}-{number}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        number += 1
 
 
 def _plain(value: Decimal | None) -> str:

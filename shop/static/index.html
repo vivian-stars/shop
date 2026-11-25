@@ -108,6 +108,22 @@
       border-radius: 14px;
       padding: 18px;
     }
+    .drop {
+      margin-top: 8px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      min-height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: var(--muted);
+      background: white;
+      cursor: pointer;
+      padding: 16px;
+    }
+    .drop.over { border-color: var(--accent); background: #eef6f5; color: var(--ink); }
+    .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   </style>
 </head>
 <body>
@@ -193,58 +209,79 @@
       <div class="channels" id="channels"></div>
       <p class="hint">运送渠道可以多选。页面默认只展示无忧物流-标准，其他已选渠道可以再勾上。</p>
 
-      <h2>包邮基准</h2>
+      <h2>产品</h2>
+      <div class="channels">
+        <label><input type="radio" name="product_mode" value="single" checked> 单个产品导入</label>
+        <label><input type="radio" name="product_mode" value="batch"> 批量产品导入</label>
+      </div>
+      <div id="single-product">
+        <div class="grid">
+          <label>货物类型
+            <select name="cargo">
+              <option value="general">普货</option>
+              <option value="special">非普货（带电 / 非液体化妆品）</option>
+            </select>
+          </label>
+          <label>SKU 编号<input name="sku" id="sku" placeholder="例如 SKU-001"></label>
+          <label>产品规格（cm）<input name="spec" id="spec" placeholder="60x40x20"></label>
+          <label>产品重量（g）<input name="weight" id="weight" placeholder="100 或 100g"></label>
+        </div>
+        <p class="hint">规格按长 x 宽 x 高填写，例如 60x40x20。</p>
+      </div>
+      <div id="batch-product" class="hidden">
+        <p class="hint"><a class="file" href="/api/products/sample">下载空白样例</a>。表头依次是 sku编号、货物类型、产品规格、产品重量、平台佣金、联盟佣金、金币佣金、一站推佣金、广告费用、损耗。成本填 8 表示 8%，留空就用下面成本比例里的数字。</p>
+        <div id="product-drop" class="drop">将文件拖入框内或者上传文件</div>
+        <input id="products-file" class="file-input" name="products_file" type="file" accept=".xlsx,.xlsm">
+        <p class="hint" id="product-file-note"></p>
+      </div>
+
+      <h2>成本比例</h2>
       <div class="grid">
         <label>包邮基准（元）<input name="benchmark" value="45" inputmode="decimal"></label>
-        <label>佣金比例（%）<input name="commission_rate" value="20" inputmode="decimal"></label>
+        <label>平台佣金（%）<input name="platform_fee" value="8" inputmode="decimal"></label>
+        <label>联盟佣金（%）<input name="affiliate_fee" value="10" inputmode="decimal"></label>
+        <label>金币佣金（%）<input name="coin_fee" value="0" inputmode="decimal"></label>
+        <label>一站推佣金（%）<input name="one_stop_fee" value="2" inputmode="decimal"></label>
+        <label>广告费用（%）<input name="ads_fee" value="0" inputmode="decimal"></label>
+        <label>损耗（%）<input name="loss_fee" value="0" inputmode="decimal"></label>
       </div>
-      <p class="hint">佣金比例是平台佣金、联盟佣金、金币佣金和一站推费用加在一起，默认 20%。实际运费先乘这个比例，再和包邮基准比较。</p>
+      <p class="hint" id="cost-note"></p>
+      <div class="actions">
+        <button type="submit" id="calc">计算运费</button>
+      </div>
 
-      <h2>产品</h2>
-      <div class="grid">
-        <label>货物类型
-          <select name="cargo">
-            <option value="general">普货</option>
-            <option value="special">非普货（带电 / 非液体化妆品）</option>
-          </select>
+      <section class="result hidden" id="result">
+        <h2>计算结果</h2>
+        <p class="hint" id="formula"></p>
+        <label>SKU
+          <select id="sku-pick"></select>
         </label>
-        <label>SKU 编号<input name="sku" id="sku" placeholder="例如 SKU-001"></label>
-        <label>产品规格（cm）<input name="spec" id="spec" placeholder="60x40x20"></label>
-        <label>产品重量（g）<input name="weight" id="weight" placeholder="100 或 100g"></label>
-      </div>
-      <p class="hint">规格按长 x 宽 x 高填写，例如 60x40x20。也可以改为上传表格，表格需要三列：sku编号、产品规格、产品重量。</p>
-      <label>批量导入产品
-        <input id="products-file" type="file" accept=".xlsx,.xlsm">
-      </label>
+        <div class="toggles" id="show-channels"></div>
+        <label>筛选国家
+          <input class="search" id="search" placeholder="国家名">
+        </label>
+        <div id="tables"></div>
+        <div class="actions">
+          <button type="button" class="secondary" id="freight-export">运费导出</button>
+        </div>
+      </section>
 
-      <h2>输出</h2>
+      <h2>最终导入运费</h2>
       <div class="channels">
-        <label><input type="radio" name="mode" value="benchmark" checked> 包邮基准表</label>
         <label><input type="radio" name="mode" value="quantity"> 按数量计费</label>
         <label><input type="radio" name="mode" value="weight"> 按重量计费</label>
       </div>
-      <div class="grid" id="qty-fields">
-        <label>起始采购数<input name="qty_start" inputmode="numeric" placeholder="1"></label>
-        <label>截止采购数<input name="qty_end" inputmode="numeric" placeholder="5"></label>
+      <div class="grid hidden" id="qty-fields">
+        <label>起始采购数<input name="qty_start" value="1" inputmode="numeric"></label>
+        <label>截止采购数<input name="qty_end" value="5" inputmode="numeric"></label>
         <label>每增加定额产品采购量<input name="qty_step" value="1" inputmode="numeric"></label>
       </div>
-      <p class="hint">按数量计费时，卖家承担和不发货的国家留空。首批采购费是产品最终运费，增加运费只计配送费，不含挂号费。</p>
+      <p class="hint">按数量计费要填这三项，默认是 1、5、1。改了就按填写的数导出，留空就用默认值。按重量计费不用填。卖家承担和不发货的国家留空。</p>
       <div class="actions">
-        <button type="submit" id="calc">计算运费</button>
-        <button type="button" class="secondary" id="download">下载运费表</button>
+        <button type="button" id="final-export">最终运费导出</button>
       </div>
       <div id="message"></div>
     </form>
-
-    <section class="result hidden" id="result">
-      <h2>计算结果</h2>
-      <p class="hint" id="formula"></p>
-      <div class="toggles" id="show-channels"></div>
-      <label>筛选国家
-        <input class="search" id="search" placeholder="国家名">
-      </label>
-      <div id="tables"></div>
-    </section>
   </main>
   <script>
     const form = document.querySelector("#form");
@@ -254,6 +291,7 @@
     let rateId = "default";
     let languages = null;
     let lastPayload = null;
+    let lastQuoteData = null;
     let catalog = null;
     let platformId = "";
     let toolId = "";
@@ -270,14 +308,36 @@
       return [...document.querySelectorAll("#channels input:checked")].map((item) => item.value);
     }
 
+    function productMode() {
+      return document.querySelector("input[name=product_mode]:checked").value;
+    }
+
     function formData() {
       const data = new FormData(form);
       data.delete("channels");
       selectedChannels().forEach((name) => data.append("channels", name));
       data.set("rate_id", rateId);
-      const productFile = document.querySelector("#products-file").files[0];
-      if (productFile) data.set("products_file", productFile);
+      data.delete("products_file");
+      if (productMode() === "batch") {
+        const productFile = document.querySelector("#products-file").files[0];
+        if (productFile) data.set("products_file", productFile);
+      }
       return data;
+    }
+
+    function costPercent() {
+      const names = ["platform_fee", "affiliate_fee", "coin_fee", "one_stop_fee", "ads_fee", "loss_fee"];
+      const defaults = { platform_fee: 8, affiliate_fee: 10, coin_fee: 0, one_stop_fee: 2, ads_fee: 0, loss_fee: 0 };
+      return names.reduce((sum, name) => {
+        const raw = document.querySelector(`[name=${name}]`).value.trim();
+        const number = raw === "" ? defaults[name] : Number(raw);
+        return sum + (Number.isFinite(number) ? number : 0);
+      }, 0);
+    }
+
+    function refreshCostNote() {
+      document.querySelector("#cost-note").textContent =
+        `佣金比例是这六项相加，当前合计 ${costPercent()}%。改任何一项，运费成本都按新的合计计算，再和包邮基准比较。`;
     }
 
     function renderChannels(channels) {
@@ -445,19 +505,72 @@
 
     document.querySelectorAll("input[name=mode]").forEach((input) => {
       input.addEventListener("change", () => {
-        const mode = document.querySelector("input[name=mode]:checked").value;
-        document.querySelector("#qty-fields").classList.toggle("hidden", mode !== "quantity");
+        const selected = document.querySelector("input[name=mode]:checked");
+        document.querySelector("#qty-fields").classList.toggle("hidden", !selected || selected.value !== "quantity");
       });
     });
-    document.querySelector("#qty-fields").classList.add("hidden");
+
+    document.querySelectorAll("input[name=product_mode]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const batch = productMode() === "batch";
+        document.querySelector("#single-product").classList.toggle("hidden", batch);
+        document.querySelector("#batch-product").classList.toggle("hidden", !batch);
+      });
+    });
+
+    function rememberFile(file) {
+      const drop = document.querySelector("#product-drop");
+      const note = document.querySelector("#product-file-note");
+      if (!file) {
+        drop.textContent = "将文件拖入框内或者上传文件";
+        note.textContent = "";
+        return;
+      }
+      drop.textContent = file.name;
+      note.textContent = `已选择 ${file.name}，${file.size} 字节。`;
+    }
+
+    const productDrop = document.querySelector("#product-drop");
+    const productFile = document.querySelector("#products-file");
+    productDrop.addEventListener("click", () => productFile.click());
+    ["dragenter", "dragover"].forEach((name) => {
+      productDrop.addEventListener(name, (event) => {
+        event.preventDefault();
+        productDrop.classList.add("over");
+      });
+    });
+    ["dragleave", "drop"].forEach((name) => {
+      productDrop.addEventListener(name, (event) => {
+        event.preventDefault();
+        productDrop.classList.remove("over");
+      });
+    });
+    productDrop.addEventListener("drop", (event) => {
+      const file = event.dataTransfer.files && event.dataTransfer.files[0];
+      if (!file) return;
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      productFile.files = transfer.files;
+      rememberFile(file);
+    });
+    productFile.addEventListener("change", () => rememberFile(productFile.files[0]));
+    document.querySelectorAll("[name=platform_fee],[name=affiliate_fee],[name=coin_fee],[name=one_stop_fee],[name=ads_fee],[name=loss_fee]").forEach((input) => {
+      input.addEventListener("input", refreshCostNote);
+    });
+    refreshCostNote();
 
     function renderResult(body) {
       const section = document.querySelector("#result");
       section.classList.remove("hidden");
-      const benchmark = document.querySelector("[name=benchmark]").value || "45";
-      const commission = document.querySelector("[name=commission_rate]").value || "20";
-      document.querySelector("#formula").textContent =
-        `实际运费 = 计费重量(kg) × 配送服务费 + 挂号费。佣金 = 实际运费 × ${commission}%。运费成本合计 = 实际运费 + 佣金。不超过包邮基准 ${benchmark} 元的是包邮国家，区域调价按差异再减一次佣金。超过基准并且属于区域调价国家的，区域调价按差异再加一次佣金。其余国家把差异加佣金后写入运费模板。`;
+      const picker = document.querySelector("#sku-pick");
+      picker.innerHTML = "";
+      body.products.forEach((product, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = product.sku;
+        picker.append(option);
+      });
+      picker.value = "0";
       const names = [];
       body.products.forEach((product) => {
         product.rows.forEach((row) => {
@@ -485,8 +598,14 @@
       const shown = new Set([...document.querySelectorAll("#show-channels input:checked")].map((item) => item.value));
       const keyword = document.querySelector("#search").value.trim();
       const root = document.querySelector("#tables");
+      const index = Number(document.querySelector("#sku-pick").value || "0");
+      const product = lastPayload.products[index] || lastPayload.products[0];
+      const benchmark = document.querySelector("[name=benchmark]").value || "45";
+      const commission = product.commission_percent || String(costPercent());
+      document.querySelector("#formula").textContent =
+        `实际运费 = 计费重量(kg) × 配送服务费 + 挂号费。佣金 = 实际运费 × ${commission}%。运费成本合计 = 实际运费 + 佣金。不超过包邮基准 ${benchmark} 元的是包邮国家，区域调价按差异再减一次佣金。超过基准并且属于区域调价国家的，区域调价按差异再加一次佣金。其余国家把差异加佣金后写入运费模板。`;
       root.innerHTML = "";
-      lastPayload.products.forEach((product) => {
+      [product].forEach((product) => {
         const title = document.createElement("h2");
         title.textContent = `${product.sku}　${product.spec} cm　${product.weight_g}g`;
         const table = document.createElement("table");
@@ -522,38 +641,82 @@
     document.querySelector("#search").addEventListener("input", () => {
       if (lastPayload) draw();
     });
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      showMessage("", "");
-      const response = await fetch("/api/quote", { method: "POST", body: formData() });
-      const body = await response.json();
-      if (!response.ok) {
-        showMessage(body.error || "没有算出来", "error");
-        return;
-      }
-      showMessage("", "");
-      renderResult(body);
+    document.querySelector("#sku-pick").addEventListener("change", () => {
+      if (lastPayload) draw();
     });
 
-    document.querySelector("#download").addEventListener("click", async () => {
-      showMessage("", "");
-      const response = await fetch("/api/export", { method: "POST", body: formData() });
-      if (!response.ok) {
-        const body = await response.json();
-        showMessage(body.error || "没有导出", "error");
-        return;
-      }
+    function copyForm(source) {
+      const copy = new FormData();
+      for (const [key, value] of source.entries()) copy.append(key, value);
+      return copy;
+    }
+
+    async function saveBlob(response, fallback) {
       const blob = await response.blob();
       const match = /filename\*=UTF-8''([^;]+)/.exec(response.headers.get("Content-Disposition") || "");
-      const filename = match ? decodeURIComponent(match[1]) : "运费表.xlsx";
+      const filename = match ? decodeURIComponent(match[1]) : fallback;
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = filename;
       link.click();
       URL.revokeObjectURL(link.href);
       const warnings = response.headers.get("X-Export-Warnings");
-      showMessage(warnings ? decodeURIComponent(warnings) : "运费表已下载。", warnings ? "note" : "note");
+      showMessage(warnings ? decodeURIComponent(warnings) : "运费表已下载。", "note");
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      showMessage("", "");
+      if (productMode() === "batch" && !document.querySelector("#products-file").files[0]) {
+        showMessage("请把产品表拖进框里，或点击框选择文件", "error");
+        return;
+      }
+      const data = formData();
+      const response = await fetch("/api/quote", { method: "POST", body: copyForm(data) });
+      const body = await response.json();
+      if (!response.ok) {
+        showMessage(body.error || "没有算出来", "error");
+        return;
+      }
+      lastQuoteData = data;
+      showMessage("", "");
+      renderResult(body);
+    });
+
+    document.querySelector("#freight-export").addEventListener("click", async () => {
+      if (!lastQuoteData) {
+        showMessage("请先计算运费", "error");
+        return;
+      }
+      const data = new FormData();
+      for (const [key, value] of lastQuoteData.entries()) {
+        if (key !== "mode") data.append(key, value);
+      }
+      data.set("mode", "benchmark");
+      const response = await fetch("/api/export", { method: "POST", body: data });
+      if (!response.ok) {
+        const body = await response.json();
+        showMessage(body.error || "没有导出", "error");
+        return;
+      }
+      await saveBlob(response, "运费表.xlsx");
+    });
+
+    document.querySelector("#final-export").addEventListener("click", async () => {
+      const selected = document.querySelector("input[name=mode]:checked");
+      if (!selected) {
+        showMessage("请选择按数量计费或按重量计费", "error");
+        return;
+      }
+      const data = formData();
+      data.set("mode", selected.value);
+      const response = await fetch("/api/export", { method: "POST", body: data });
+      if (!response.ok) {
+        const body = await response.json();
+        showMessage(body.error || "没有导出", "error");
+        return;
+      }
+      await saveBlob(response, "运费模板.xlsx");
     });
 
     textForm.addEventListener("submit", async (event) => {
