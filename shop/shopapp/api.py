@@ -16,6 +16,7 @@ from shop.shopapp.catalog import catalog_payload, platform_by_id, tool_by_id
 from shop.shopapp.models import Costs
 from shop.shopapp.money import money
 from shop.shopapp.platforms import get_platform
+from shop.shopapp.platforms.aliexpress.benchmark import benchmark_rows, workbook_bytes
 from shop.shopapp.products import MISSING, product_from_fields, products_from_excel
 from shop.shopapp.store import DATA, RateStore
 from shop.shopapp.translate.engine import translate_text
@@ -132,9 +133,12 @@ async def quote(
     one_stop_fee: str = Form(""),
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
+    benchmark: str = Form("45"),
+    commission_rate: str = Form("20"),
 ):
     _require_freight(platform)
     try:
+        benchmark_amount, commission = _benchmark_inputs(benchmark, commission_rate)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -159,7 +163,9 @@ async def quote(
         raise HTTPException(400, str(exc)) from exc
     return {
         "multiplier": format(costs.multiplier(), "f"),
-        "products": [_product_payload(item) for item in quotes],
+        "benchmark": _plain(benchmark_amount),
+        "commission_rate": _plain(commission),
+        "products": [_product_payload(item, benchmark_amount, commission) for item in quotes],
     }
 
 
@@ -183,11 +189,14 @@ async def export_file(
     one_stop_fee: str = Form(""),
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
+    benchmark: str = Form("45"),
+    commission_rate: str = Form("20"),
 ):
-    if mode not in {"quantity", "weight"}:
+    if mode not in {"quantity", "weight", "benchmark"}:
         raise HTTPException(400, "请选择按数量计费或按重量计费")
     _require_freight(platform)
     try:
+        benchmark_amount, commission = _benchmark_inputs(benchmark, commission_rate)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -203,6 +212,13 @@ async def export_file(
             loss_fee,
         )
         names = _channels(book, channels)
+        if mode == "benchmark":
+            quotes = get_platform(platform_id).quote(book, products, names, cargo, costs)
+            content = workbook_bytes(quotes, benchmark_amount, commission)
+            weight_text = _weight_label(products)
+            cargo_label = "普货" if cargo == "general" else "非普货"
+            filename = f"{weight_text} {cargo_label} 包邮基准{_plain(benchmark_amount)}元.xlsx"
+            return _download(filename, content, [])
         start = _optional_int(qty_start)
         end = _optional_int(qty_end)
         step = _optional_int(qty_step) or 1
@@ -319,34 +335,68 @@ def _optional_int(raw: str) -> int | None:
         raise HTTPException(400, "采购数要填整数") from exc
 
 
-def _product_payload(item):
+def _product_payload(item, benchmark: Decimal, commission: Decimal):
     product = item.product
+    priced = {(row.channel, row.country): row for row in benchmark_rows(item, benchmark, commission)}
+    rows = []
+    for row in item.rows:
+        bench = priced.get((row.channel, row.country))
+        rows.append({
+            "country": row.country,
+            "code": row.code,
+            "channel": row.channel,
+            "currency": row.currency,
+            "shippable": row.shippable,
+            "detail": row.detail,
+            "billable_g": None if row.billable_g is None else _num(row.billable_g),
+            "rate_per_kg": _cash(row.rate_per_kg),
+            "registration": _cash(row.registration),
+            "first_fee": _cash(row.first_fee),
+            "additional_fee": _cash(row.additional_fee),
+            "freight": _cash(row.freight),
+            "final_freight": _cash(row.final_freight),
+            "extra_freight": _cash(row.extra_freight),
+            "mode": row.mode,
+            "template_name": bench.template_name if bench else row.country,
+            "regional_name": bench.regional_name if bench else "",
+            "benchmark_freight": _plain(bench.freight) if bench and bench.freight is not None else None,
+            "benchmark_commission": _plain(bench.commission) if bench and bench.commission is not None else None,
+            "benchmark_total": _plain(bench.total) if bench and bench.total is not None else None,
+            "benchmark_note": bench.note if bench else "",
+            "benchmark_included": _plain(bench.included) if bench and bench.included is not None else None,
+            "benchmark_difference": _plain(bench.difference) if bench and bench.difference is not None else None,
+            "benchmark_regional": _plain(bench.regional_price) if bench and bench.regional_price is not None else None,
+            "benchmark_set": bench.regional_set if bench else "",
+            "benchmark_template_fee": _plain(bench.template_fee) if bench and bench.template_fee is not None else None,
+            "benchmark_extra_each": _plain(bench.extra_each) if bench and bench.extra_each is not None else None,
+        })
     return {
         "sku": product.sku,
         "spec": f"{_num(product.length_cm)}x{_num(product.width_cm)}x{_num(product.height_cm)}",
         "weight_g": _num(product.weight_g),
         "warnings": item.warnings,
-        "rows": [
-            {
-                "country": row.country,
-                "code": row.code,
-                "channel": row.channel,
-                "currency": row.currency,
-                "shippable": row.shippable,
-                "detail": row.detail,
-                "billable_g": None if row.billable_g is None else _num(row.billable_g),
-                "rate_per_kg": _cash(row.rate_per_kg),
-                "registration": _cash(row.registration),
-                "first_fee": _cash(row.first_fee),
-                "additional_fee": _cash(row.additional_fee),
-                "freight": _cash(row.freight),
-                "final_freight": _cash(row.final_freight),
-                "extra_freight": _cash(row.extra_freight),
-                "mode": row.mode,
-            }
-            for row in item.rows
-        ],
+        "rows": rows,
     }
+
+
+def _benchmark_inputs(benchmark: str, commission_rate: str) -> tuple[Decimal, Decimal]:
+    try:
+        amount = Decimal((benchmark or "").strip() or "45")
+        rate = Decimal((commission_rate or "").strip() or "20") / Decimal("100")
+    except Exception as exc:
+        raise HTTPException(400, "包邮基准和佣金比例要填数字") from exc
+    if amount < 0 or rate < 0:
+        raise HTTPException(400, "包邮基准和佣金比例要填数字")
+    return amount, rate
+
+
+def _plain(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
 
 
 def _cash(value):
