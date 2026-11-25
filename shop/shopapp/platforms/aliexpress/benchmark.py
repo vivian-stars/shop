@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from io import BytesIO
 
 from openpyxl import Workbook
@@ -21,6 +21,13 @@ TEMPLATE_NAME: dict[str, str] = _PRICING["template_name"]
 DISCOUNT_COUNTRIES: list[str] = _PRICING["discount_countries"]
 DISCOUNTS = (Decimal("0.20"), Decimal("0.25"), Decimal("0.30"), Decimal("0.35"))
 MONEY_FORMAT = '"￥"#,##0.00;"￥"\\-#,##0.00'
+
+
+@dataclass(frozen=True)
+class BenchmarkChoice:
+    amount: Decimal
+    country: str
+    freight: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,36 @@ class BenchmarkRow:
     shippable: bool
 
 
+def infer_benchmark(rows, commission_rate: Decimal) -> BenchmarkChoice:
+    """包邮基准取买家包邮国家实际运费降序后的正中间，再去掉小数。
+
+    买家包邮包括成本不超过基准的国家，以及区域调价国家。基准和这组国家互相决定，
+    取能对上的那个整数。45 个国家时正中间是第 23 个；0.3 千克普货、佣金 20% 时是比利时。
+    """
+    prepared = [_prepared_freight(item, commission_rate) for item in rows if item.currency != "USD"]
+    prepared = [item for item in prepared if item is not None]
+    if not prepared:
+        return BenchmarkChoice(Decimal("0"), "", None)
+    candidates = {Decimal("0")}
+    for freight, total, _regional, _name in prepared:
+        candidates.add(_floor_yuan(freight))
+        candidates.add(_floor_yuan(total))
+    fixed = []
+    for amount in sorted(candidates):
+        choice = _middle_choice(prepared, amount)
+        if choice is not None and choice.amount == amount:
+            fixed.append(choice)
+    if len(fixed) == 1:
+        return fixed[0]
+    reached = _walk_benchmark(prepared, Decimal("0"))
+    for choice in fixed:
+        if choice.amount == reached.amount:
+            return choice
+    if fixed:
+        return fixed[0]
+    return reached
+
+
 def benchmark_rows(quote: ProductQuote, benchmark: Decimal, commission_rate: Decimal) -> list[BenchmarkRow]:
     rows = [_row(item, benchmark, commission_rate) for item in quote.rows if item.currency != "USD"]
     rows.sort(key=lambda item: (item.total is None, item.total or Decimal("0"), item.template_name))
@@ -63,7 +100,7 @@ def discount_rows(rows: list[BenchmarkRow]) -> list[dict]:
     return built
 
 
-def workbook_bytes(quotes: list[ProductQuote], benchmark: Decimal, commission_rate: Decimal) -> bytes:
+def workbook_bytes(quotes: list[ProductQuote], commission_rate: Decimal) -> bytes:
     book = Workbook()
     default = book.active
     used: set[str] = set()
@@ -81,7 +118,8 @@ def workbook_bytes(quotes: list[ProductQuote], benchmark: Decimal, commission_ra
                 quote.warnings,
             )
             rate = subset.product.costs.commission_rate() if subset.product.costs is not None else commission_rate
-            rows = benchmark_rows(subset, benchmark, rate)
+            choice = infer_benchmark(subset.rows, rate)
+            rows = benchmark_rows(subset, choice.amount, rate)
             title = channel if single else f"{quote.product.sku}-{channel}"
             sheet = book.create_sheet(_unique_title(used, title))
             _write_main(sheet, rows, quote.product.weight_g)
@@ -94,6 +132,47 @@ def workbook_bytes(quotes: list[ProductQuote], benchmark: Decimal, commission_ra
     buffer = BytesIO()
     book.save(buffer)
     return buffer.getvalue()
+
+
+def _prepared_freight(item, commission_rate: Decimal):
+    if not item.shippable or item.rate_per_kg is None or item.billable_g is None:
+        return None
+    freight = item.billable_g / Decimal("1000") * item.rate_per_kg + (item.registration or Decimal("0"))
+    total = freight * (Decimal("1") + commission_rate)
+    regional = bool(REGIONAL_NAME.get(item.country, ""))
+    return freight, total, regional, TEMPLATE_NAME.get(item.country, item.country)
+
+
+def _middle_choice(prepared, benchmark: Decimal) -> BenchmarkChoice | None:
+    chosen = [item for item in prepared if item[2] or item[1] <= benchmark]
+    if not chosen:
+        return None
+    chosen.sort(key=lambda item: (-item[0], item[3]))
+    freight, _total, _regional, name = chosen[len(chosen) // 2]
+    return BenchmarkChoice(_floor_yuan(freight), name, freight)
+
+
+def _walk_benchmark(prepared, start: Decimal) -> BenchmarkChoice:
+    amount = start
+    seen: set[Decimal] = set()
+    last = BenchmarkChoice(Decimal("0"), "", None)
+    for _ in range(len(prepared) + 2):
+        choice = _middle_choice(prepared, amount)
+        if choice is None:
+            if amount == 0 and prepared:
+                amount = max(_floor_yuan(item[0]) for item in prepared)
+                continue
+            return last
+        last = choice
+        if choice.amount == amount or choice.amount in seen:
+            return choice
+        seen.add(amount)
+        amount = choice.amount
+    return last
+
+
+def _floor_yuan(value: Decimal) -> Decimal:
+    return value.to_integral_value(rounding=ROUND_FLOOR)
 
 
 def _row(item, benchmark: Decimal, commission_rate: Decimal) -> BenchmarkRow:

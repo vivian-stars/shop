@@ -24,6 +24,29 @@ def _rows():
     return {row.country: row for row in benchmark_rows(quote, Decimal("45"), Decimal("0.2"))}
 
 
+def test_benchmark_comes_from_the_middle_free_shipping_country():
+    response = client.post(
+        "/api/quote",
+        data={
+            "channels": "无忧物流-标准",
+            "sku": "SKU-1",
+            "spec": "20x10x5",
+            "weight": "300",
+            "cargo": "general",
+            **_fees("8", "10", "0", "2", "0", "0"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["benchmark"] == "45"
+    assert body["benchmark_country"] == "比利时"
+    assert body["benchmark_freight"] == "45.975"
+    choice = body["products"][0]["benchmarks"][0]
+    assert choice["channel"] == "无忧物流-标准"
+    assert choice["amount"] == "45"
+    assert choice["country"] == "比利时"
+
+
 def test_australia_matches_gina_sheet():
     row = _rows()["澳大利亚"]
     assert row.note == "额外设置包邮国家"

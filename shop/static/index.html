@@ -237,7 +237,6 @@
 
       <h2>成本比例</h2>
       <div class="grid">
-        <label>包邮基准（元）<input name="benchmark" value="45" inputmode="decimal"></label>
         <label>平台佣金（%）<input name="platform_fee" value="8" inputmode="decimal"></label>
         <label>联盟佣金（%）<input name="affiliate_fee" value="10" inputmode="decimal"></label>
         <label>金币佣金（%）<input name="coin_fee" value="0" inputmode="decimal"></label>
@@ -252,6 +251,7 @@
 
       <section class="result hidden" id="result">
         <h2>计算结果</h2>
+        <p class="hint" id="benchmark-note"></p>
         <p class="hint" id="formula"></p>
         <label>SKU
           <select id="sku-pick"></select>
@@ -292,6 +292,7 @@
     let languages = null;
     let lastPayload = null;
     let lastQuoteData = null;
+    let freightExpanded = false;
     let catalog = null;
     let platformId = "";
     let toolId = "";
@@ -337,7 +338,7 @@
 
     function refreshCostNote() {
       document.querySelector("#cost-note").textContent =
-        `佣金比例是这六项相加，当前合计 ${costPercent()}%。改任何一项，运费成本都按新的合计计算，再和包邮基准比较。`;
+        `佣金比例是这六项相加，当前合计 ${costPercent()}%。改任何一项，运费成本都按新的合计计算。包邮基准按包邮国家实际运费的正中间自动取整，不用填写。`;
     }
 
     function renderChannels(channels) {
@@ -571,6 +572,7 @@
         picker.append(option);
       });
       picker.value = "0";
+      freightExpanded = false;
       const names = [];
       body.products.forEach((product) => {
         product.rows.forEach((row) => {
@@ -594,14 +596,25 @@
       draw();
     }
 
+    function benchmarkChoice(product, shown) {
+      const choices = product.benchmarks || [];
+      const visible = choices.filter((item) => shown.has(item.channel));
+      return visible.find((item) => item.channel === "无忧物流-标准") || visible[0] || choices[0] || { amount: "", country: "", freight: "" };
+    }
+
     function draw() {
       const shown = new Set([...document.querySelectorAll("#show-channels input:checked")].map((item) => item.value));
       const keyword = document.querySelector("#search").value.trim();
       const root = document.querySelector("#tables");
       const index = Number(document.querySelector("#sku-pick").value || "0");
       const product = lastPayload.products[index] || lastPayload.products[0];
-      const benchmark = document.querySelector("[name=benchmark]").value || "45";
       const commission = product.commission_percent || String(costPercent());
+      const choice = benchmarkChoice(product, shown);
+      const benchmark = choice.amount || "0";
+      const source = choice.freight === "" || choice.freight == null ? "" : Number(choice.freight).toFixed(2);
+      document.querySelector("#benchmark-note").textContent = choice.country
+        ? `包邮基准 ${benchmark} 元，取自${choice.country}的实际运费 ${source} 元。`
+        : "";
       document.querySelector("#formula").textContent =
         `实际运费 = 计费重量(kg) × 配送服务费 + 挂号费。佣金 = 实际运费 × ${commission}%。运费成本合计 = 实际运费 + 佣金。不超过包邮基准 ${benchmark} 元的是包邮国家，区域调价按差异再减一次佣金。超过基准并且属于区域调价国家的，区域调价按差异再加一次佣金。其余国家把差异加佣金后写入运费模板。`;
       root.innerHTML = "";
@@ -611,7 +624,7 @@
         const table = document.createElement("table");
         table.innerHTML = "<thead><tr><th>渠道</th><th>国家</th><th>区域调价国家</th><th>配送服务费</th><th>挂号费</th><th>实际运费</th><th>佣金</th><th>运费成本合计</th><th>备注</th><th>产品中的运费</th><th>差异运费</th><th>区域调价</th><th>是否设置</th><th>运费模板费用</th><th>每多买一个运费</th><th>说明</th></tr></thead>";
         const body = document.createElement("tbody");
-        product.rows
+        const sorted = product.rows
           .filter((row) => shown.has(row.channel))
           .filter((row) => !keyword || row.country.includes(keyword) || (row.template_name || "").includes(keyword))
           .slice()
@@ -619,8 +632,10 @@
             if (a.benchmark_total == null) return 1;
             if (b.benchmark_total == null) return -1;
             return Number(a.benchmark_total) - Number(b.benchmark_total);
-          })
-          .forEach((row) => {
+          });
+        const folded = !freightExpanded && !keyword && sorted.length > 5;
+        const visible = folded ? sorted.slice(0, 5) : sorted;
+        visible.forEach((row) => {
             const tr = document.createElement("tr");
             if (!row.shippable) tr.className = "no";
             const cell = (value) => value == null || value === "" ? "—" : value;
@@ -629,6 +644,17 @@
           });
         table.append(body);
         root.append(title, table);
+        if (!keyword && sorted.length > 5) {
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "secondary";
+          toggle.textContent = freightExpanded ? "收起" : `展开其余 ${sorted.length - 5} 个国家`;
+          toggle.addEventListener("click", () => {
+            freightExpanded = !freightExpanded;
+            draw();
+          });
+          root.append(toggle);
+        }
         product.warnings.forEach((text) => {
           const note = document.createElement("p");
           note.className = "hint";
@@ -642,6 +668,7 @@
       if (lastPayload) draw();
     });
     document.querySelector("#sku-pick").addEventListener("change", () => {
+      freightExpanded = false;
       if (lastPayload) draw();
     });
 

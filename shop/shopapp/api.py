@@ -13,10 +13,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shop.shopapp.catalog import catalog_payload, platform_by_id, tool_by_id
-from shop.shopapp.models import Costs
+from shop.shopapp.models import Costs, ProductQuote
 from shop.shopapp.money import money
 from shop.shopapp.platforms import get_platform
-from shop.shopapp.platforms.aliexpress.benchmark import benchmark_rows, workbook_bytes
+from shop.shopapp.platforms.aliexpress.benchmark import benchmark_rows, infer_benchmark, workbook_bytes
 from shop.shopapp.products import MISSING, product_from_fields, products_from_excel, sample_workbook
 from shop.shopapp.store import DATA, RateStore
 from shop.shopapp.translate.engine import translate_text
@@ -144,11 +144,9 @@ async def quote(
     one_stop_fee: str = Form(""),
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
-    benchmark: str = Form("45"),
 ):
     _require_freight(platform)
     try:
-        benchmark_amount = _benchmark_amount(benchmark)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -173,11 +171,15 @@ async def quote(
         raise HTTPException(400, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    payloads = [_product_payload(item) for item in quotes]
+    primary = _primary_benchmark(payloads)
     return {
         "multiplier": format(costs.multiplier(), "f"),
-        "benchmark": _plain(benchmark_amount),
+        "benchmark": primary["amount"],
+        "benchmark_country": primary["country"],
+        "benchmark_freight": primary["freight"],
         "commission_rate": _plain(costs.commission_rate()),
-        "products": [_product_payload(item, benchmark_amount) for item in quotes],
+        "products": payloads,
     }
 
 
@@ -202,13 +204,11 @@ async def export_file(
     one_stop_fee: str = Form(""),
     ads_fee: str = Form(""),
     loss_fee: str = Form(""),
-    benchmark: str = Form("45"),
 ):
     if mode not in {"quantity", "weight", "benchmark"}:
         raise HTTPException(400, "请选择按数量计费或按重量计费")
     _require_freight(platform)
     try:
-        benchmark_amount = _benchmark_amount(benchmark)
         platform_id, book, products, costs = await _inputs(
             platform,
             rate_id,
@@ -228,7 +228,7 @@ async def export_file(
         names = _channels(book, channels)
         if mode == "benchmark":
             quotes = get_platform(platform_id).quote(book, products, names, cargo, costs)
-            return _benchmark_download(quotes, benchmark_amount)
+            return _benchmark_download(quotes)
         start = _optional_int(qty_start)
         if start is None:
             start = 1
@@ -379,10 +379,26 @@ def _optional_int(raw: str) -> int | None:
         raise HTTPException(400, "采购数要填整数") from exc
 
 
-def _product_payload(item, benchmark: Decimal):
+def _product_payload(item):
     product = item.product
     commission = product.costs.commission_rate() if product.costs is not None else Decimal("0")
-    priced = {(row.channel, row.country): row for row in benchmark_rows(item, benchmark, commission)}
+    channels: list[str] = []
+    for row in item.rows:
+        if row.channel not in channels:
+            channels.append(row.channel)
+    benchmarks = []
+    priced = {}
+    for channel in channels:
+        subset = ProductQuote(product, [row for row in item.rows if row.channel == channel], item.warnings)
+        choice = infer_benchmark(subset.rows, commission)
+        benchmarks.append({
+            "channel": channel,
+            "amount": _plain(choice.amount),
+            "country": choice.country,
+            "freight": _plain(choice.freight) if choice.freight is not None else "",
+        })
+        for bench in benchmark_rows(subset, choice.amount, commission):
+            priced[(bench.channel, bench.country)] = bench
     rows = []
     for row in item.rows:
         bench = priced.get((row.channel, row.country))
@@ -421,33 +437,48 @@ def _product_payload(item, benchmark: Decimal):
         "spec": f"{_num(product.length_cm)}x{_num(product.width_cm)}x{_num(product.height_cm)}",
         "weight_g": _num(product.weight_g),
         "commission_percent": _plain(commission * Decimal("100")),
+        "benchmarks": benchmarks,
         "warnings": item.warnings,
         "rows": rows,
     }
 
 
-def _benchmark_amount(benchmark: str) -> Decimal:
-    try:
-        amount = Decimal((benchmark or "").strip() or "45")
-    except Exception as exc:
-        raise HTTPException(400, "包邮基准要填数字") from exc
-    if amount < 0:
-        raise HTTPException(400, "包邮基准要填数字")
-    return amount
+def _primary_benchmark(payloads: list[dict]) -> dict:
+    empty = {"amount": "0", "country": "", "freight": ""}
+    if not payloads:
+        return empty
+    choices = payloads[0].get("benchmarks") or []
+    for choice in choices:
+        if choice["channel"] == "无忧物流-标准":
+            return choice
+    return choices[0] if choices else empty
 
 
-def _benchmark_download(quotes, benchmark: Decimal) -> Response:
+def _quote_benchmark(quote) -> Decimal:
+    rate = quote.product.costs.commission_rate() if quote.product.costs is not None else Decimal("0")
+    channels: list[str] = []
+    for row in quote.rows:
+        if row.channel not in channels:
+            channels.append(row.channel)
+    channel = "无忧物流-标准" if "无忧物流-标准" in channels else (channels[0] if channels else "")
+    rows = [row for row in quote.rows if row.channel == channel]
+    return infer_benchmark(rows, rate).amount
+
+
+def _benchmark_download(quotes) -> Response:
     if len(quotes) == 1:
         rate = quotes[0].product.costs.commission_rate()
-        content = workbook_bytes(quotes, benchmark, rate)
-        return _download(_benchmark_filename(quotes[0].product, benchmark, False), content, [])
+        amount = _quote_benchmark(quotes[0])
+        content = workbook_bytes(quotes, rate)
+        return _download(_benchmark_filename(quotes[0].product, amount, False), content, [])
     buffer = io.BytesIO()
     used: set[str] = set()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for quote in quotes:
             rate = quote.product.costs.commission_rate()
-            content = workbook_bytes([quote], benchmark, rate)
-            name = _unique_filename(used, _benchmark_filename(quote.product, benchmark, True))
+            amount = _quote_benchmark(quote)
+            content = workbook_bytes([quote], rate)
+            name = _unique_filename(used, _benchmark_filename(quote.product, amount, True))
             archive.writestr(name, content)
     return _download("运费表.zip", buffer.getvalue(), [])
 
